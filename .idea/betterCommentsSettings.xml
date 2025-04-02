@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="BetterCommentsSettings">
+    <option name="initialized" value="true" />
+    <option name="tags">
+      <list>
+        <CustomTag>
+          <option name="color" value="#FF2D00" />
+          <option name="type" value="IMPORTANT" />
+        </CustomTag>
+        <CustomTag>
+          <option name="color" value="#3498DB" />
+          <option name="type" value="INFO" />
+        </CustomTag>
+        <CustomTag>
+          <option name="color" value="#FF8C00" />
+          <option name="type" value="TODO" />
+        </CustomTag>
+      </list>
+    </option>
+  </component>
+</project>
