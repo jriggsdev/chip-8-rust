@@ -4,6 +4,11 @@ pub const DISPLAY_WIDTH: usize = 64;
 /// The emulators display height in pixels
 pub const DISPLAY_HEIGHT: usize = 32;
 
+const PROGRAM_START_ADDRESS: u16 = 0x200;
+const MEMORY_SIZE: usize = 4096;
+const STACK_SIZE: usize = 16;
+const VARIABLE_REGISTER_COUNT: usize = 16;
+
 /// The font sprite data consisting of hexadecimal numbers 0-F
 const FONT: [u8; 80] = [
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -100,12 +105,12 @@ impl OpCode {
 /// Represents a Chip8 interpreter
 #[derive(Debug)]
 pub struct Chip8 {
-    // 4096 bytes of memory
-    ram: [u8; 4096],
+    /// [`MEMORY_SIZE`] bytes of memory
+    ram: [u8; MEMORY_SIZE],
     /// frame buffer for drawing screen
     frame_buffer: [u8; DISPLAY_WIDTH * DISPLAY_HEIGHT],
-    /// A stack of 16 2-byte addresses
-    stack: [u16; 16],
+    /// A stack of [`STACK_SIZE`] 2-byte addresses
+    stack: [u16; STACK_SIZE],
     /// A pointer to the current location in the stack
     stack_pointer: u8,
     /// A delay timer register
@@ -116,8 +121,8 @@ pub struct Chip8 {
     program_counter: u16,
     /// An index register
     index_register: u16,
-    /// 16 8-bit variable registers
-    variable_registers: [u8; 16],
+    /// [`VARIABLE_REGISTER_COUNT`] 8-bit variable registers
+    variable_registers: [u8; VARIABLE_REGISTER_COUNT],
 }
 
 impl Default for Chip8 {
@@ -131,15 +136,15 @@ impl Chip8 {
     /// Creates a new Chip8 instance
     pub fn new() -> Self {
         let mut chip8 = Self {
-            ram: [0; 4096],
+            ram: [0; MEMORY_SIZE],
             frame_buffer: [0; DISPLAY_WIDTH * DISPLAY_HEIGHT],
-            stack: [0; 16],
+            stack: [0; STACK_SIZE],
             stack_pointer: 0,
             delay_timer: 0,
             sound_timer: 0,
-            program_counter: 0,
+            program_counter: PROGRAM_START_ADDRESS,
             index_register: 0,
-            variable_registers: [0; 16],
+            variable_registers: [0; VARIABLE_REGISTER_COUNT],
         };
 
         chip8.ram[0x050..0x050 + FONT.len()].copy_from_slice(&FONT);
@@ -177,17 +182,17 @@ mod tests {
         let chip8 = Chip8::new();
         Chip8::default();
 
-        let mut expected_ram = [0; 4096];
+        let mut expected_ram = [0; MEMORY_SIZE];
         expected_ram[0x050..0x050 + FONT.len()].copy_from_slice(&FONT);
 
         let expected_frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
-        let expected_stack = [0; 16];
+        let expected_stack = [0; STACK_SIZE];
         let expected_stack_pointer = 0;
         let expected_delay_timer = 0;
         let expected_sound_timer = 0;
-        let expected_program_counter = 0;
+        let expected_program_counter = PROGRAM_START_ADDRESS;
         let expected_index_register = 0;
-        let expected_variable_registers = [0; 16];
+        let expected_variable_registers = [0; VARIABLE_REGISTER_COUNT];
 
         assert_eq!(expected_ram, chip8.ram);
         assert_eq!(expected_frame_buffer, chip8.frame_buffer);

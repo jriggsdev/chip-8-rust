@@ -22,7 +22,7 @@ async fn main() {
     let mut chip8 = Chip8::new();
 
     loop {
-        // chip8.execute_next_instruction();
+        chip8.execute_next_instruction();
         let fb = chip8.frame_buffer();
         render_frame(fb).await;
     }
