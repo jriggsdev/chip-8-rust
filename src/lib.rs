@@ -48,50 +48,50 @@ enum Chip8Instruction {
 struct OpCode {
     /// Full 16-bit opcode
     opcode: u16,
-    /// first-highest nibble
-    i: u8,
-    /// second-highest nibble
-    x: u8,
-    /// third-highest nibble
-    y: u8,
-    /// fourth-highest nibble
-    n: u8,
-    /// third and fourth-highest nibbles
-    nn: u8,
-    /// second, third, and fourth-highest nibbles
-    nnn: u16
 }
 
 impl OpCode {
     /// Create a new opcode instance from a u16
     fn new(opcode: u16) -> Self {
-        let i = ((opcode & 0xF000) >> 12) as u8;
-        let x = ((opcode & 0x0F00) >> 8) as u8;
-        let y = ((opcode & 0x00F0) >> 4) as u8;
-        let n = (opcode & 0x000F) as u8;
-        let nn = (opcode & 0x00FF) as u8;
-        let nnn = opcode & 0x0FFF;
-
         Self {
-            opcode,
-            i,
-            x,
-            y,
-            n,
-            nn,
-            nnn
+            opcode
         }
+    }
+
+    /// second-highest nibble of the opcode as u8
+    fn x(&self) -> u8 {
+        ((self.opcode & 0x0F00) >> 8) as u8
+    }
+
+    /// third-highest nibble of the opcode as u8
+    fn y(&self) -> u8 {
+        ((self.opcode & 0x00F0) >> 4) as u8
+    }
+
+    /// last (lowest) nibble of the opcode as u8
+    fn n(&self) -> u8 {
+        (self.opcode & 0x000F) as u8
+    }
+
+    /// lower byte (last two nibbles) of the opcode as u8
+    fn nn(&self) -> u8 {
+        (self.opcode & 0x00FF) as u8
+    }
+
+    /// second, third and fourth nibbles of the opcode as u16
+    fn nnn(&self) -> u16 {
+        self.opcode & 0x0FFF
     }
 
     /// Decodes the opcode as a CHIP-8 instruction
     fn as_instruction(&self) -> Chip8Instruction {
         match self.opcode {
             0x00E0 => Chip8Instruction::ClearScreen,
-            0x1000..=0x1FFF => Chip8Instruction::Jump(self.nnn),
-            0x6000..=0x6FFF => Chip8Instruction::SetVariableRegister(self.x, self.nn),
-            0x7000..=0x7FFF => Chip8Instruction::AddToVariableRegister(self.x, self.nn),
-            0xA000..=0xAFFF => Chip8Instruction::SetIndexRegister(self.nnn),
-            0xD000..=0xDFFF => Chip8Instruction::Draw(self.x, self.y, self.n),
+            0x1000..=0x1FFF => Chip8Instruction::Jump(self.nnn()),
+            0x6000..=0x6FFF => Chip8Instruction::SetVariableRegister(self.x(), self.nn()),
+            0x7000..=0x7FFF => Chip8Instruction::AddToVariableRegister(self.x(), self.nn()),
+            0xA000..=0xAFFF => Chip8Instruction::SetIndexRegister(self.nnn()),
+            0xD000..=0xDFFF => Chip8Instruction::Draw(self.x(), self.y(), self.n()),
             _ => panic!("Encountered invalid opcode {:X}", self.opcode)
         }
     }
@@ -200,12 +200,11 @@ mod tests {
         let opcode = OpCode::new(0x1234);
 
         assert_eq!(0x1234, opcode.opcode);
-        assert_eq!(1, opcode.i);
-        assert_eq!(2, opcode.x);
-        assert_eq!(3, opcode.y);
-        assert_eq!(4, opcode.n);
-        assert_eq!(0x34, opcode.nn);
-        assert_eq!(0x234, opcode.nnn);
+        assert_eq!(2, opcode.x());
+        assert_eq!(3, opcode.y());
+        assert_eq!(4, opcode.n());
+        assert_eq!(0x34, opcode.nn());
+        assert_eq!(0x234, opcode.nnn());
     }
 
     #[test]
