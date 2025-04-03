@@ -1,8 +1,8 @@
 /// The emulators display width in pixels
-const DISPLAY_WIDTH: usize = 64;
+pub const DISPLAY_WIDTH: usize = 64;
 
 /// The emulators display height in pixels
-const DISPLAY_HEIGHT: usize = 32;
+pub const DISPLAY_HEIGHT: usize = 32;
 
 /// The font sprite data consisting of hexadecimal numbers 0-F
 const FONT: [u8; 80] = [
@@ -147,10 +147,15 @@ impl Chip8 {
         chip8
     }
 
+    /// Gets the Chip-8 instances frame buffer
+    pub fn frame_buffer(&self) -> &[u8; DISPLAY_WIDTH * DISPLAY_HEIGHT] {
+        &self.frame_buffer
+    }
+
     /// Execute the next instruction at the address pointed to by the program counter register
     pub fn execute_next_instruction(&mut self) {
         let instruction = self.fetch_next_instruction();
-        todo!();
+        todo!("execute instruction");
     }
 
     /// Fetch the next instruction at the address pointed to by the program counter register
