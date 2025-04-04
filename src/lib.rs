@@ -160,7 +160,16 @@ impl Chip8 {
     /// Execute the next instruction at the address pointed to by the program counter register
     pub fn execute_next_instruction(&mut self) {
         let instruction = self.fetch_next_instruction();
-        todo!("execute instruction");
+
+        self.program_counter += 2;
+        match instruction {
+            Chip8Instruction::ClearScreen => self.clear_screen(),
+            Chip8Instruction::Jump(nnn) => self.jump(nnn),
+            Chip8Instruction::SetVariableRegister(x, nn) => self.set_variable_register(x, nn),
+            Chip8Instruction::AddToVariableRegister(x, nn) => self.add_to_variable_register(x, nn),
+            Chip8Instruction::SetIndexRegister(nnn) => self.set_index_register(nnn),
+            Chip8Instruction::Draw(x, y, n) => self.draw(x, y, n)
+        };
     }
 
     /// Fetch the next instruction at the address pointed to by the program counter register
@@ -170,6 +179,67 @@ impl Chip8 {
 
         let opcode = (high as u16) << 8 | low as u16;
         OpCode::new(opcode).as_instruction()
+    }
+
+    /// sets all values in the frame buffer to 0
+    fn clear_screen(&mut self) {
+        self.frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
+    }
+
+    /// sets the program counter register to nnn
+    fn jump(&mut self, nnn: u16) {
+        self.program_counter = nnn;
+    }
+
+    /// Sets variable register at index x to nn
+    fn set_variable_register(&mut self, x: u8, nn: u8) {
+        self.variable_registers[x as usize] = nn;
+    }
+
+    /// Adds nn to variable register at index x
+    fn add_to_variable_register(&mut self, x: u8, nn: u8) {
+        self.variable_registers[x as usize] += nn;
+    }
+
+    /// Sets the index register to nnn
+    fn set_index_register(&mut self, nnn: u16) {
+        self.index_register = nnn;
+    }
+
+    /// draws an n pixel tall sprite from the memory location that the index register is holding to
+    /// the frame buffer, at horizontal X coordinate held in variable register at index x and the Y
+    /// coordinate held in the variable register at index y
+    fn draw(&mut self, x: u8, y: u8, n: u8) {
+        let sprite_memory_address = self.index_register as usize;
+        let sprite_bytes = &self.ram[sprite_memory_address..sprite_memory_address + n as usize];
+        let x_offset = self.variable_registers[x as usize] as usize % DISPLAY_WIDTH;
+        let y_offset = self.variable_registers[y as usize] as usize % DISPLAY_HEIGHT;
+
+        // reset the VF register. We will flip it if any pixes go from ON to OFF
+        self.variable_registers[0xF] = 0;
+
+        // iterate over the sprite bytes
+        for (row, byte) in sprite_bytes.iter().enumerate() {
+            // iterate over the bites in the current sprite byte
+            for bit_index in 0..8 {
+                let pixel_x_index = x_offset + bit_index;
+                let pixel_y_index = y_offset + row;
+
+                // Don't draw sprite pixels if they go off the edge of the screen
+                if pixel_x_index < DISPLAY_WIDTH && pixel_y_index < DISPLAY_WIDTH {
+                    let sprite_pixel_value= (byte >> (7 - bit_index)) & 0x01;
+                    let frame_buffer_pixel_index = pixel_y_index * DISPLAY_WIDTH + pixel_x_index;
+                    let frame_buffer_pixel_value = self.frame_buffer[frame_buffer_pixel_index];
+
+                    // If a pixes was on but is now off flip the VF register
+                    if frame_buffer_pixel_value == 1 && sprite_pixel_value == 0 {
+                        self.variable_registers[0xF] = 1;
+                    }
+
+                    self.frame_buffer[frame_buffer_pixel_index] = sprite_pixel_value;
+                }
+            }
+        }
     }
 }
 
@@ -257,5 +327,138 @@ mod tests {
     #[should_panic(expected = "Encountered invalid opcode 234")]
     fn invalid_opcode_panics_when_trying_to_get_as_instruction() {
         OpCode::new(0x0234).as_instruction();
+    }
+
+    #[test]
+    fn can_fetch_next_instruction() {
+        let mut chip8 = Chip8::new();
+        chip8.ram[0x200] = 0x00;
+        chip8.ram[0x201] = 0xE0;
+        chip8.program_counter = 0x200;
+
+        let instruction = chip8.fetch_next_instruction();
+        assert_eq!(Chip8Instruction::ClearScreen, instruction);
+    }
+
+    #[test]
+    fn can_clear_screen() {
+        let mut chip8 = Chip8::new();
+        chip8.frame_buffer = [1; DISPLAY_WIDTH * DISPLAY_HEIGHT];
+        chip8.clear_screen();
+        assert_eq!([0; DISPLAY_WIDTH * DISPLAY_HEIGHT], chip8.frame_buffer);
+    }
+
+    #[test]
+    fn can_jump() {
+        let mut chip8 = Chip8::new();
+        chip8.program_counter = 0x200;
+        chip8.jump(0x300);
+        assert_eq!(0x300, chip8.program_counter);
+    }
+
+    #[test]
+    fn can_set_variable_register() {
+        let mut chip8 = Chip8::new();
+
+        chip8.set_variable_register(0x2, 0x34);
+        chip8.set_variable_register(0x7, 0xAA);
+
+        assert_eq!(0x34, chip8.variable_registers[2]);
+        assert_eq!(0xAA, chip8.variable_registers[7]);
+    }
+
+    #[test]
+    fn can_add_to_variable_register() {
+        let mut chip8 = Chip8::new();
+
+        chip8.set_variable_register(0x2, 0x34);
+        chip8.set_variable_register(0x7, 0xAA);
+
+        assert_eq!(0x34, chip8.variable_registers[2]);
+        assert_eq!(0xAA, chip8.variable_registers[7]);
+
+        chip8.add_to_variable_register(0x2, 0x34);
+        chip8.add_to_variable_register(0x7, 0x12);
+
+        assert_eq!(0x68, chip8.variable_registers[2]);
+        assert_eq!(0xBC, chip8.variable_registers[7]);
+    }
+
+    #[test]
+    fn can_set_index_register() {
+        let mut chip8 = Chip8::new();
+        chip8.set_index_register(0x300);
+        assert_eq!(0x300, chip8.index_register);
+    }
+
+    #[test]
+    fn can_draw() {
+        todo!("write a test for draw")
+    }
+
+    #[test]
+    fn execute_next_instruction_can_execute_clear_screen() {
+        let mut chip8 = Chip8::new();
+        chip8.ram[0x200] = 0x00;
+        chip8.ram[0x201] = 0xE0;
+        chip8.program_counter = 0x200;
+        chip8.frame_buffer = [1; DISPLAY_WIDTH * DISPLAY_HEIGHT];
+
+        chip8.execute_next_instruction();
+
+        assert_eq!([0; DISPLAY_WIDTH * DISPLAY_HEIGHT], chip8.frame_buffer);
+        assert_eq!(chip8.program_counter, 0x202);
+    }
+
+    #[test]
+    fn execute_next_instruction_can_execute_jump() {
+        let mut chip8 = Chip8::new();
+        chip8.ram[0x200] = 0x12;
+        chip8.ram[0x201] = 0x34;
+        chip8.program_counter = 0x200;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x234, chip8.program_counter);
+    }
+
+    #[test]
+    fn execute_next_instruction_can_execute_set_variable_register() {
+        let mut chip8 = Chip8::new();
+        chip8.ram[0x200] = 0x63;
+        chip8.ram[0x201] = 0xBC;
+        chip8.program_counter = 0x200;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0xBC, chip8.variable_registers[0x03]);
+        assert_eq!(0x202, chip8.program_counter);
+    }
+
+    #[test]
+    fn execute_next_instruction_can_execute_add_to_variable_register() {
+        let mut chip8 = Chip8::new();
+        chip8.ram[0x200] = 0x73;
+        chip8.ram[0x201] = 0xBC;
+        chip8.program_counter = 0x200;
+        chip8.variable_registers[0x03] = 0x12;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0xCE, chip8.variable_registers[0x03]);
+        assert_eq!(0x202, chip8.program_counter);
+    }
+
+    #[test]
+    fn execute_next_instruction_can_execute_set_index_register() {
+        let mut chip8 = Chip8::new();
+        chip8.ram[0x200] = 0xA3;
+        chip8.ram[0x201] = 0xBC;
+        chip8.program_counter = 0x200;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x3BC, chip8.index_register);
+        assert_eq!(0x202, chip8.program_counter);
     }
 }
