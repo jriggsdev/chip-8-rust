@@ -1,5 +1,3 @@
-use macroquad::miniquad::start;
-
 /// The emulators display width in pixels
 pub const DISPLAY_WIDTH: usize = 64;
 
@@ -12,7 +10,7 @@ const STACK_SIZE: usize = 16;
 const VARIABLE_REGISTER_COUNT: usize = 16;
 
 /// The font sprite data consisting of hexadecimal numbers 0-F
-const FONT: [u8; 80] = [
+const FONT: [u8; 16 * 5] = [
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
     0x20, 0x60, 0x20, 0x20, 0x70, // 1
     0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
@@ -48,6 +46,10 @@ enum Chip8Instruction {
     /// with horizontal coordinate in variable register x and vertical screen coordinate in
     /// variable register y
     Draw(u8, u8, u8),
+    /// Instruction to push the current address to the stack and jump to a subroutine at a new address
+    CallSubroutine(u16),
+    /// Instruction to pop an address from the stack and return the program counter to that address
+    ReturnFromSubroutine,
 }
 
 /// Represents a 16-bit opcode
@@ -94,7 +96,9 @@ impl OpCode {
     fn as_instruction(&self) -> Chip8Instruction {
         match self.opcode {
             0x00E0 => Chip8Instruction::ClearScreen,
+            0x00EE => Chip8Instruction::ReturnFromSubroutine,
             0x1000..=0x1FFF => Chip8Instruction::Jump(self.nnn()),
+            0x2000..=0x2FFF => Chip8Instruction::CallSubroutine(self.nnn()),
             0x6000..=0x6FFF => Chip8Instruction::SetVariableRegister(self.x(), self.nn()),
             0x7000..=0x7FFF => Chip8Instruction::AddToVariableRegister(self.x(), self.nn()),
             0xA000..=0xAFFF => Chip8Instruction::SetIndexRegister(self.nnn()),
@@ -176,7 +180,9 @@ impl Chip8 {
             Chip8Instruction::SetVariableRegister(x, nn) => self.set_variable_register(x, nn),
             Chip8Instruction::AddToVariableRegister(x, nn) => self.add_to_variable_register(x, nn),
             Chip8Instruction::SetIndexRegister(nnn) => self.set_index_register(nnn),
-            Chip8Instruction::Draw(x, y, n) => self.draw(x, y, n)
+            Chip8Instruction::Draw(x, y, n) => self.draw(x, y, n),
+            Chip8Instruction::CallSubroutine(nnn) => self.call_subroutine(nnn),
+            Chip8Instruction::ReturnFromSubroutine => self.return_from_subroutine(),
         };
     }
 
@@ -234,7 +240,7 @@ impl Chip8 {
                 let pixel_y_index = y_offset + row;
 
                 // Don't draw sprite pixels if they go off the edge of the screen
-                if pixel_x_index < DISPLAY_WIDTH && pixel_y_index < DISPLAY_WIDTH {
+                if pixel_x_index < DISPLAY_WIDTH && pixel_y_index < DISPLAY_HEIGHT {
                     let sprite_pixel_value= (byte >> (7 - bit_index)) & 0x01;
                     let frame_buffer_pixel_index = pixel_y_index * DISPLAY_WIDTH + pixel_x_index;
                     let frame_buffer_pixel_value = self.frame_buffer[frame_buffer_pixel_index];
@@ -249,11 +255,41 @@ impl Chip8 {
             }
         }
     }
+
+    /// Pushes the current program counter address to the stack and jumps to a new address
+    fn call_subroutine(&mut self, nnn: u16) {
+        self.stack[self.stack_pointer as usize] = self.program_counter;
+        self.stack_pointer += 1;
+        self.program_counter = nnn;
+    }
+
+    /// Pops an address from the stack and sets the program counter to it
+    fn return_from_subroutine(&mut self) {
+        self.stack_pointer -= 1;
+        let address = self.stack[self.stack_pointer as usize];
+        self.program_counter = address;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn draw_test_sprite(x_offset: u8, y_offset: u8, sprite_bytes: &[u8]) -> [u8; DISPLAY_WIDTH * DISPLAY_HEIGHT] {
+        let mut test_frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
+        for (row, byte) in sprite_bytes.iter().enumerate() {
+            for bit in 0..8 {
+                let sprite_bit_value = (byte >> (7 - bit)) & 0x01;
+                let x_index = (x_offset + bit) as usize;
+                let y_index = y_offset as usize + row;
+
+                if (x_index < DISPLAY_WIDTH && y_index < DISPLAY_HEIGHT) {
+                    test_frame_buffer[y_index * DISPLAY_WIDTH + x_index] = sprite_bit_value;
+                }
+            }
+        }
+        test_frame_buffer
+    }
 
     #[test]
     fn can_create_new_chip_8() {
@@ -411,7 +447,67 @@ mod tests {
 
     #[test]
     fn can_draw() {
-        todo!("write a test for draw")
+        let x_offset = 34;
+        let y_offset = 12;
+        let sprite_bytes = [0b11111111, 0b01010101, 0b00000000, 0b11011101];
+        let expected_frame_buffer = draw_test_sprite(x_offset, y_offset, &sprite_bytes);
+        let mut chip8 = Chip8::new();
+
+        chip8.frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
+        chip8.ram[0x300..0x304].copy_from_slice(&sprite_bytes);
+        chip8.set_index_register(0x300);
+        chip8.set_variable_register(0x2, x_offset);
+        chip8.set_variable_register(0x3, y_offset);
+
+        chip8.draw(0x2, 0x3, 0x4);
+
+        assert_eq!(expected_frame_buffer, chip8.frame_buffer);
+    }
+
+    #[test]
+    fn drawing_sprites_near_edge_does_not_wrap() {
+        let x_offset = 60;
+        let y_offset = 30;
+        let sprite_bytes = [0b11111111, 0b01010101, 0b00000000, 0b11011101];
+        let expected_frame_buffer = draw_test_sprite(x_offset, y_offset, &sprite_bytes);
+        let mut chip8 = Chip8::new();
+
+        chip8.frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
+        chip8.ram[0x300..0x304].copy_from_slice(&sprite_bytes);
+        chip8.set_index_register(0x300);
+        chip8.set_variable_register(0x2, x_offset);
+        chip8.set_variable_register(0x3, y_offset);
+
+        chip8.draw(0x2, 0x3, 0x4);
+
+        assert_eq!(expected_frame_buffer, chip8.frame_buffer);
+    }
+
+    #[test]
+    fn can_call_subroutine() {
+        let mut chip8 = Chip8::new();
+        chip8.program_counter = 0x202;
+
+        chip8.call_subroutine(0x300);
+
+        assert_eq!(0x202, chip8.stack[0]);
+        assert_eq!(1, chip8.stack_pointer);
+        assert_eq!(0x300, chip8.program_counter);
+    }
+
+    #[test]
+    fn can_return_from_subroutine() {
+        let mut chip8 = Chip8::new();
+        chip8.stack[0] = 0x200;
+
+        chip8.call_subroutine(0x300);
+        assert_eq!(0x200, chip8.stack[0]);
+        assert_eq!(1, chip8.stack_pointer);
+        assert_eq!(0x300, chip8.program_counter);
+
+        chip8.return_from_subroutine();
+        assert_eq!(0x200, chip8.program_counter);
+        assert_eq!(0, chip8.stack_pointer);
     }
 
     #[test]
@@ -478,5 +574,54 @@ mod tests {
 
         assert_eq!(0x3BC, chip8.index_register);
         assert_eq!(0x202, chip8.program_counter);
+    }
+
+    #[test]
+    fn execute_next_instruction_can_execute_draw() {
+        let x_offset = 34;
+        let y_offset = 12;
+        let sprite_bytes = [0b11111111, 0b01010101, 0b00000000, 0b11011101];
+        let expected_frame_buffer = draw_test_sprite(x_offset, y_offset, &sprite_bytes);
+        let mut chip8 = Chip8::new();
+
+        chip8.ram[0x200] = 0xD2;
+        chip8.ram[0x201] = 0x34;
+        chip8.ram[0x300..0x304].copy_from_slice(&sprite_bytes);
+        chip8.set_index_register(0x300);
+        chip8.set_variable_register(0x2, x_offset);
+        chip8.set_variable_register(0x3, y_offset);
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(expected_frame_buffer, chip8.frame_buffer);
+    }
+
+    #[test]
+    fn execute_next_instruction_can_execute_call_subroutine() {
+        let mut chip8 = Chip8::new();
+        chip8.ram[0x200] = 0x22;
+        chip8.ram[0x201] = 0x11;
+        chip8.program_counter = 0x200;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x211, chip8.program_counter);
+        assert_eq!(0x202, chip8.stack[0]);
+        assert_eq!(1, chip8.stack_pointer);
+    }
+
+    #[test]
+    fn execute_next_instruction_can_execute_return_from_subroutine() {
+        let mut chip8 = Chip8::new();
+        chip8.ram[0x211] = 0x00;
+        chip8.ram[0x212] = 0xEE;
+        chip8.program_counter = 0x211;
+        chip8.stack[0] = 0x200;
+        chip8.stack_pointer = 1;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x200, chip8.program_counter);
+        assert_eq!(0, chip8.stack_pointer);
     }
 }
