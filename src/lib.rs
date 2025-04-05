@@ -1,3 +1,5 @@
+use macroquad::miniquad::start;
+
 /// The emulators display width in pixels
 pub const DISPLAY_WIDTH: usize = 64;
 
@@ -155,6 +157,12 @@ impl Chip8 {
     /// Gets the Chip-8 instances frame buffer
     pub fn frame_buffer(&self) -> &[u8; DISPLAY_WIDTH * DISPLAY_HEIGHT] {
         &self.frame_buffer
+    }
+
+    /// Loads program into memory starting at address `{PROGRAM_START_ADDRESS}`
+    pub fn load_program(&mut self, program: &[u8]) {
+        let start_address = PROGRAM_START_ADDRESS as usize;
+        self.ram[start_address..start_address + program.len()].copy_from_slice(program);
     }
 
     /// Execute the next instruction at the address pointed to by the program counter register
@@ -327,6 +335,16 @@ mod tests {
     #[should_panic(expected = "Encountered invalid opcode 234")]
     fn invalid_opcode_panics_when_trying_to_get_as_instruction() {
         OpCode::new(0x0234).as_instruction();
+    }
+
+    #[test]
+    fn can_load_program() {
+        let mut chip8 = Chip8::new();
+        let program = [0x00, 0xE0, 0x12, 0x34, 0x56, 0x78];
+        chip8.load_program(&program);
+
+        let start_address = PROGRAM_START_ADDRESS as usize;
+        assert_eq!(program, chip8.ram[start_address..start_address + program.len()]);
     }
 
     #[test]
