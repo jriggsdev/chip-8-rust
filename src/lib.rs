@@ -93,17 +93,17 @@ impl OpCode {
     }
 
     /// Decodes the opcode as a CHIP-8 instruction
-    fn as_instruction(&self) -> Chip8Instruction {
+    fn as_instruction(&self) -> Result<Chip8Instruction, String> {
         match self.opcode {
-            0x00E0 => Chip8Instruction::ClearScreen,
-            0x00EE => Chip8Instruction::ReturnFromSubroutine,
-            0x1000..=0x1FFF => Chip8Instruction::Jump(self.nnn()),
-            0x2000..=0x2FFF => Chip8Instruction::CallSubroutine(self.nnn()),
-            0x6000..=0x6FFF => Chip8Instruction::SetVariableRegister(self.x(), self.nn()),
-            0x7000..=0x7FFF => Chip8Instruction::AddToVariableRegister(self.x(), self.nn()),
-            0xA000..=0xAFFF => Chip8Instruction::SetIndexRegister(self.nnn()),
-            0xD000..=0xDFFF => Chip8Instruction::Draw(self.x(), self.y(), self.n()),
-            _ => panic!("Encountered invalid opcode {:X}", self.opcode)
+            0x00E0 => Ok(Chip8Instruction::ClearScreen),
+            0x00EE => Ok(Chip8Instruction::ReturnFromSubroutine),
+            0x1000..=0x1FFF => Ok(Chip8Instruction::Jump(self.nnn())),
+            0x2000..=0x2FFF => Ok(Chip8Instruction::CallSubroutine(self.nnn())),
+            0x6000..=0x6FFF => Ok(Chip8Instruction::SetVariableRegister(self.x(), self.nn())),
+            0x7000..=0x7FFF => Ok(Chip8Instruction::AddToVariableRegister(self.x(), self.nn())),
+            0xA000..=0xAFFF => Ok(Chip8Instruction::SetIndexRegister(self.nnn())),
+            0xD000..=0xDFFF => Ok(Chip8Instruction::Draw(self.x(), self.y(), self.n())),
+            _ => Err(format!("Encountered invalid opcode {:X}", self.opcode))
         }
     }
 }
@@ -171,23 +171,26 @@ impl Chip8 {
 
     /// Execute the next instruction at the address pointed to by the program counter register
     pub fn execute_next_instruction(&mut self) {
-        let instruction = self.fetch_next_instruction();
-
+        // let instruction = self.fetch_next_instruction().unwrap_or_else(|err| panic!("{}", err));
+        let fetch_result = self.fetch_next_instruction();
         self.program_counter += 2;
-        match instruction {
-            Chip8Instruction::ClearScreen => self.clear_screen(),
-            Chip8Instruction::Jump(nnn) => self.jump(nnn),
-            Chip8Instruction::SetVariableRegister(x, nn) => self.set_variable_register(x, nn),
-            Chip8Instruction::AddToVariableRegister(x, nn) => self.add_to_variable_register(x, nn),
-            Chip8Instruction::SetIndexRegister(nnn) => self.set_index_register(nnn),
-            Chip8Instruction::Draw(x, y, n) => self.draw(x, y, n),
-            Chip8Instruction::CallSubroutine(nnn) => self.call_subroutine(nnn),
-            Chip8Instruction::ReturnFromSubroutine => self.return_from_subroutine(),
-        };
+
+        if let Ok(instruction) = fetch_result {
+            match instruction {
+                Chip8Instruction::ClearScreen => self.clear_screen(),
+                Chip8Instruction::Jump(nnn) => self.jump(nnn),
+                Chip8Instruction::SetVariableRegister(x, nn) => self.set_variable_register(x, nn),
+                Chip8Instruction::AddToVariableRegister(x, nn) => self.add_to_variable_register(x, nn),
+                Chip8Instruction::SetIndexRegister(nnn) => self.set_index_register(nnn),
+                Chip8Instruction::Draw(x, y, n) => self.draw(x, y, n),
+                Chip8Instruction::CallSubroutine(nnn) => self.call_subroutine(nnn),
+                Chip8Instruction::ReturnFromSubroutine => self.return_from_subroutine(),
+            };
+        }
     }
 
     /// Fetch the next instruction at the address pointed to by the program counter register
-    fn fetch_next_instruction(&mut self) -> Chip8Instruction {
+    fn fetch_next_instruction(&mut self) -> Result<Chip8Instruction, String> {
         let high = self.ram[self.program_counter as usize];
         let low = self.ram[(self.program_counter + 1) as usize];
 
@@ -212,6 +215,7 @@ impl Chip8 {
 
     /// Adds nn to variable register at index x
     fn add_to_variable_register(&mut self, x: u8, nn: u8) {
+        todo!("Handle overflow");
         self.variable_registers[x as usize] += nn;
     }
 
@@ -283,7 +287,7 @@ mod tests {
                 let x_index = (x_offset + bit) as usize;
                 let y_index = y_offset as usize + row;
 
-                if (x_index < DISPLAY_WIDTH && y_index < DISPLAY_HEIGHT) {
+                if x_index < DISPLAY_WIDTH && y_index < DISPLAY_HEIGHT {
                     test_frame_buffer[y_index * DISPLAY_WIDTH + x_index] = sprite_bit_value;
                 }
             }
@@ -334,43 +338,42 @@ mod tests {
     #[test]
     fn clear_screen_has_correct_opcode() {
         let opcode = OpCode::new(0x00E0);
-        assert_eq!(Chip8Instruction::ClearScreen, opcode.as_instruction());
+        assert_eq!(Ok(Chip8Instruction::ClearScreen), opcode.as_instruction());
     }
 
     #[test]
     fn jump_has_correct_opcode() {
         let opcode = OpCode::new(0x1234);
-        assert_eq!(Chip8Instruction::Jump(0x234), opcode.as_instruction());
+        assert_eq!(Ok(Chip8Instruction::Jump(0x234)), opcode.as_instruction());
     }
 
     #[test]
     fn set_variable_register_has_correct_opcode() {
         let opcode = OpCode::new(0x6234);
-        assert_eq!(Chip8Instruction::SetVariableRegister(0x2, 0x34), opcode.as_instruction());
+        assert_eq!(Ok(Chip8Instruction::SetVariableRegister(0x2, 0x34)), opcode.as_instruction());
     }
 
     #[test]
     fn add_to_variable_register_has_correct_opcode() {
         let opcode = OpCode::new(0x7234);
-        assert_eq!(Chip8Instruction::AddToVariableRegister(0x2, 0x34), opcode.as_instruction());
+        assert_eq!(Ok(Chip8Instruction::AddToVariableRegister(0x2, 0x34)), opcode.as_instruction());
     }
 
     #[test]
     fn set_index_register_has_correct_opcode() {
         let opcode = OpCode::new(0xA234);
-        assert_eq!(Chip8Instruction::SetIndexRegister(0x234), opcode.as_instruction());
+        assert_eq!(Ok(Chip8Instruction::SetIndexRegister(0x234)), opcode.as_instruction());
     }
 
     #[test]
     fn draw_has_correct_opcode() {
         let opcode = OpCode::new(0xD234);
-        assert_eq!(Chip8Instruction::Draw(0x2, 0x3, 0x4), opcode.as_instruction());
+        assert_eq!(Ok(Chip8Instruction::Draw(0x2, 0x3, 0x4)), opcode.as_instruction());
     }
 
     #[test]
-    #[should_panic(expected = "Encountered invalid opcode 234")]
-    fn invalid_opcode_panics_when_trying_to_get_as_instruction() {
-        OpCode::new(0x0234).as_instruction();
+    fn invalid_opcode_returns_error_when_parsed_to_instruction() {
+        assert!(OpCode::new(0x0234).as_instruction().is_err());
     }
 
     #[test]
@@ -391,7 +394,7 @@ mod tests {
         chip8.program_counter = 0x200;
 
         let instruction = chip8.fetch_next_instruction();
-        assert_eq!(Chip8Instruction::ClearScreen, instruction);
+        assert_eq!(Ok(Chip8Instruction::ClearScreen), instruction);
     }
 
     #[test]
@@ -436,6 +439,11 @@ mod tests {
 
         assert_eq!(0x68, chip8.variable_registers[2]);
         assert_eq!(0xBC, chip8.variable_registers[7]);
+    }
+
+    #[test]
+    fn add_to_variable_register_handles_overflow() {
+        todo!("Write a test for this")
     }
 
     #[test]

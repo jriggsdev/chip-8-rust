@@ -20,7 +20,7 @@ async fn render_frame(frame_buffer: &[u8; DISPLAY_WIDTH * DISPLAY_HEIGHT]) {
 #[macroquad::main("Chip-8 Emulator")]
 async fn main() {
     let mut chip8 = Chip8::new();
-    let program = include_bytes!("/home/josh/Downloads/ibm_logo.ch8");
+    let program = include_bytes!("/home/josh/Downloads/test_opcode.ch8");
     chip8.load_program(program);
 
     loop {
