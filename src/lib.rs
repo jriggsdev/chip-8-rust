@@ -62,6 +62,10 @@ enum Chip8Instruction {
     SetVxToVy(u8, u8),
     /// Instruction to set Vx to the binary or of Vx and Vy
     BinaryOrVxWithVy(u8, u8),
+    /// Instruction to set Vx to the binary and of Vx and Vy
+    BinaryAndVxWithVy(u8, u8),
+    /// Instruction to set Vx to the binary xor of Vx and Vy
+    BinaryXorVxWithVy(u8, u8),
 }
 
 /// Represents a 16-bit opcode
@@ -120,12 +124,42 @@ impl OpCode {
                 match self.n() {
                     0x0 => Ok(Chip8Instruction::SetVxToVy(self.x(), self.y())),
                     0x1 => Ok(Chip8Instruction::BinaryOrVxWithVy(self.x(), self.y())),
+                    0x2 => Ok(Chip8Instruction::BinaryAndVxWithVy(self.x(), self.y())),
+                    0x3 => Ok(Chip8Instruction::BinaryXorVxWithVy(self.x(), self.y())),
+                    // 0x4 => todo!(),
+                    // 0x5 => todo!(),
+                    // 0x6 => todo!(),
+                    // 0x7 => todo!(),
+                    // 0xE => todo!(),
                     _ => Err(format!("Encountered invalid opcode {:X}", self.opcode)) // TODO test this case
                 }
             },
             0x9000..=0x9FFF => Ok(Chip8Instruction::SkipInstructionIfVxNotEqualsVy(self.x(), self.y())),
             0xA000..=0xAFFF => Ok(Chip8Instruction::SetIndexRegister(self.nnn())),
+            // 0xB000..=0xBFFF => todo!(),
+            // 0xC000..=0xCFFF => todo!(),
             0xD000..=0xDFFF => Ok(Chip8Instruction::Draw(self.x(), self.y(), self.n())),
+            0xE000..=0xEFFF => {
+                match self.nn() {
+                    // 0x9E => todo!(),
+                    // 0xA1 => todo!(),
+                    _ => Err(format!("Encountered invalid opcode {:X}", self.opcode)) // TODO test this case
+                }
+            }
+            0xF000..=0xFFFF => {
+                match self.nn() {
+                    // 0x07 => todo!(),
+                    // 0x0A => todo!(),
+                    // 0x15 => todo!(),
+                    // 0x18 => todo!(),
+                    // 0x1E => todo!(),
+                    // 0x29 => todo!(),
+                    // 0x33 => todo!(),
+                    // 0x55 => todo!(),
+                    // 0x65 => todo!(),
+                    _ => Err(format!("Encountered invalid opcode {:X}", self.opcode)) // TODO test this case
+                }
+            }
             _ => Err(format!("Encountered invalid opcode {:X}", self.opcode))
         }
     }
@@ -214,6 +248,8 @@ impl Chip8 {
                 Chip8Instruction::SkipInstructionIfVxNotEqualsVy(x, y) => self.skip_instruction_if_vx_not_equals_vy(x, y),
                 Chip8Instruction::SetVxToVy(x, y) => self.set_vx_to_vy(x, y),
                 Chip8Instruction::BinaryOrVxWithVy(x, y) => self.binary_or_vx_with_vy(x, y),
+                Chip8Instruction::BinaryAndVxWithVy(x, y) => self.binary_and_vx_with_vy(x, y),
+                Chip8Instruction::BinaryXorVxWithVy(x, y) => self.binary_xor_vx_with_vy(x, y),
             };
         }
     }
@@ -339,6 +375,18 @@ impl Chip8 {
     /// in variable register x and the value in variable register y
     fn binary_or_vx_with_vy(&mut self, x: u8, y: u8) {
         self.variable_registers[x as usize] |= self.variable_registers[y as usize];
+    }
+
+    /// Sets value in variable register x to the result of doing a binary and with the value
+    /// in variable register x and the value in variable register y
+    fn binary_and_vx_with_vy(&mut self, x: u8, y: u8) {
+        self.variable_registers[x as usize] &= self.variable_registers[y as usize];
+    }
+
+    /// Sets value in variable register x to the result of doing a binary xor with the value
+    /// in variable register x and the value in variable register y
+    fn binary_xor_vx_with_vy(&mut self, x: u8, y: u8) {
+        self.variable_registers[x as usize] ^= self.variable_registers[y as usize];
     }
 }
 
@@ -712,6 +760,28 @@ mod tests {
     }
 
     #[test]
+    fn can_binary_and_vx_with_vy() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.variable_registers[0xF] = 0xAF;
+
+        chip8.binary_and_vx_with_vy(0x2, 0xF);
+
+        assert_eq!(0x34 & 0xAF, chip8.variable_registers[0x2]);
+    }
+
+    #[test]
+    fn can_binary_xor_vx_with_vy() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.variable_registers[0xF] = 0xAF;
+
+        chip8.binary_xor_vx_with_vy(0x2, 0xF);
+
+        assert_eq!(0x34 ^ 0xAF, chip8.variable_registers[0x2]);
+    }
+
+    #[test]
     fn execute_next_instruction_can_execute_clear_screen() {
         let mut chip8 = Chip8::new();
         chip8.ram[0x200] = 0x00;
@@ -906,5 +976,33 @@ mod tests {
         chip8.execute_next_instruction();
 
         assert_eq!(0x34 | 0xAF, chip8.variable_registers[0x2]);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_binary_and_vx_with_vy() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.variable_registers[0xF] = 0xAF;
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0x82;
+        chip8.ram[0x201] = 0xF2;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x34 & 0xAF, chip8.variable_registers[0x2]);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_binary_xor_vx_with_vy() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.variable_registers[0xF] = 0xAF;
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0x82;
+        chip8.ram[0x201] = 0xF3;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x34 ^ 0xAF, chip8.variable_registers[0x2]);
     }
 }
