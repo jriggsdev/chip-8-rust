@@ -50,6 +50,14 @@ enum Chip8Instruction {
     CallSubroutine(u16),
     /// Instruction to pop an address from the stack and return the program counter to that address
     ReturnFromSubroutine,
+    /// Instruction to skip the next instruction if VX == NN
+    SkipInstructionIfVxEqualsNn(u8, u8),
+    /// Instruction to skip the next instruction if VX != NN
+    SkipInstructionIfVxNotEqualsNn(u8, u8),
+    /// Instruction to skip the next instruction if VX == VY
+    SkipInstructionIfVxEqualsVy(u8, u8),
+    /// Instruction to skip the next instruction if VX != VY
+    SkipInstructionIfVxNotEqualsVy(u8, u8),
 }
 
 /// Represents a 16-bit opcode
@@ -99,8 +107,12 @@ impl OpCode {
             0x00EE => Ok(Chip8Instruction::ReturnFromSubroutine),
             0x1000..=0x1FFF => Ok(Chip8Instruction::Jump(self.nnn())),
             0x2000..=0x2FFF => Ok(Chip8Instruction::CallSubroutine(self.nnn())),
+            0x3000..=0x3FFF => Ok(Chip8Instruction::SkipInstructionIfVxEqualsNn(self.x(), self.nn())),
+            0x4000..=0x4FFF => Ok(Chip8Instruction::SkipInstructionIfVxNotEqualsNn(self.x(), self.nn())),
+            0x5000..=0x5FFF => Ok(Chip8Instruction::SkipInstructionIfVxEqualsVy(self.x(), self.y())),
             0x6000..=0x6FFF => Ok(Chip8Instruction::SetVariableRegister(self.x(), self.nn())),
             0x7000..=0x7FFF => Ok(Chip8Instruction::AddToVariableRegister(self.x(), self.nn())),
+            0x9000..=0x9FFF => Ok(Chip8Instruction::SkipInstructionIfVxNotEqualsVy(self.x(), self.y())),
             0xA000..=0xAFFF => Ok(Chip8Instruction::SetIndexRegister(self.nnn())),
             0xD000..=0xDFFF => Ok(Chip8Instruction::Draw(self.x(), self.y(), self.n())),
             _ => Err(format!("Encountered invalid opcode {:X}", self.opcode))
@@ -185,6 +197,10 @@ impl Chip8 {
                 Chip8Instruction::Draw(x, y, n) => self.draw(x, y, n),
                 Chip8Instruction::CallSubroutine(nnn) => self.call_subroutine(nnn),
                 Chip8Instruction::ReturnFromSubroutine => self.return_from_subroutine(),
+                Chip8Instruction::SkipInstructionIfVxEqualsNn(x, nn) => self.skip_instruction_if_vx_equals_nn(x, nn),
+                Chip8Instruction::SkipInstructionIfVxNotEqualsNn(x, nn) => self.skip_instruction_if_vx_not_equals_nn(x, nn),
+                Chip8Instruction::SkipInstructionIfVxEqualsVy(x, y) => self.skip_instruction_if_vx_equals_vy(x, y),
+                Chip8Instruction::SkipInstructionIfVxNotEqualsVy(x, y) => self.skip_instruction_if_vx_not_equals_vy(x, y),
             };
         }
     }
@@ -215,8 +231,7 @@ impl Chip8 {
 
     /// Adds nn to variable register at index x
     fn add_to_variable_register(&mut self, x: u8, nn: u8) {
-        todo!("Handle overflow");
-        self.variable_registers[x as usize] += nn;
+        self.variable_registers[x as usize] = self.variable_registers[x as usize].wrapping_add(nn);
     }
 
     /// Sets the index register to nnn
@@ -272,6 +287,34 @@ impl Chip8 {
         self.stack_pointer -= 1;
         let address = self.stack[self.stack_pointer as usize];
         self.program_counter = address;
+    }
+
+    /// Skips an instruction by incrementing program counter by 2 if variable register at index x == nn
+    fn skip_instruction_if_vx_equals_nn(&mut self, x: u8, nn: u8) {
+        if self.variable_registers[x as usize] == nn {
+            self.program_counter += 2;
+        }
+    }
+
+    /// Skips an instruction by incrementing program counter by 2 if variable register at index x != nn
+    fn skip_instruction_if_vx_not_equals_nn(&mut self, x: u8, nn: u8) {
+        if self.variable_registers[x as usize] != nn {
+            self.program_counter += 2;
+        }
+    }
+
+    /// Skips an instruction by incrementing program counter by 2 if value in variable register at index x == value in variable register at index y
+    fn skip_instruction_if_vx_equals_vy(&mut self, x: u8, y: u8) {
+        if self.variable_registers[x as usize] == self.variable_registers[y as usize] {
+            self.program_counter += 2;
+        }
+    }
+
+    /// Skips an instruction by incrementing program counter by 2 if value in variable register at index x != value in variable register at index y
+    fn skip_instruction_if_vx_not_equals_vy(&mut self, x: u8, y: u8) {
+        if self.variable_registers[x as usize] != self.variable_registers[y as usize] {
+            self.program_counter += 2;
+        }
     }
 }
 
@@ -443,7 +486,18 @@ mod tests {
 
     #[test]
     fn add_to_variable_register_handles_overflow() {
-        todo!("Write a test for this")
+        let initial_value: u8 = 0xF3;
+        let value_to_add: u8 = 0x34;
+        let expected_result = initial_value.wrapping_add(value_to_add);
+        let mut chip8 = Chip8::new();
+
+        chip8.set_variable_register(0x2, initial_value);
+
+        assert_eq!(initial_value, chip8.variable_registers[2]);
+
+        chip8.add_to_variable_register(0x2, value_to_add);
+
+        assert_eq!(expected_result, chip8.variable_registers[2]);
     }
 
     #[test]
@@ -516,6 +570,98 @@ mod tests {
         chip8.return_from_subroutine();
         assert_eq!(0x200, chip8.program_counter);
         assert_eq!(0, chip8.stack_pointer);
+    }
+
+    #[test]
+    fn skip_instruction_if_vx_equals_nn_skips_when_equal() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.program_counter = 0x202;
+
+        chip8.skip_instruction_if_vx_equals_nn(0x2, 0x34);
+
+        assert_eq!(0x204, chip8.program_counter);
+    }
+
+    #[test]
+    fn skip_instruction_if_vx_equals_nn_does_not_skips_when_not_equal() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.program_counter = 0x202;
+
+        chip8.skip_instruction_if_vx_equals_nn(0x2, 0x35);
+
+        assert_eq!(0x202, chip8.program_counter);
+    }
+
+    #[test]
+    fn skip_instruction_if_vx_not_equals_nn_skips_when_not_equal() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.program_counter = 0x202;
+
+        chip8.skip_instruction_if_vx_not_equals_nn(0x2, 0x35);
+
+        assert_eq!(0x204, chip8.program_counter);
+    }
+
+    #[test]
+    fn skip_instruction_if_vx_not_equals_nn_does_not_skips_when_equal() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.program_counter = 0x202;
+
+        chip8.skip_instruction_if_vx_not_equals_nn(0x2, 0x34);
+
+        assert_eq!(0x202, chip8.program_counter);
+    }
+
+    #[test]
+    fn skip_instruction_if_vx_equals_vy_skips_when_equal() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.variable_registers[0x3] = 0x34;
+        chip8.program_counter = 0x202;
+
+        chip8.skip_instruction_if_vx_equals_vy(0x2, 0x3);
+
+        assert_eq!(0x204, chip8.program_counter);
+    }
+
+    #[test]
+    fn skip_instruction_if_vx_equals_vy_does_not_skips_when_not_equal() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.variable_registers[0x3] = 0x35;
+        chip8.program_counter = 0x202;
+
+        chip8.skip_instruction_if_vx_equals_vy(0x2, 0x3);
+
+        assert_eq!(0x202, chip8.program_counter);
+    }
+
+    #[test]
+    fn skip_instruction_if_vx_not_equals_vy_skips_when_not_equal() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.variable_registers[0x3] = 0x35;
+        chip8.program_counter = 0x202;
+
+        chip8.skip_instruction_if_vx_not_equals_vy(0x2, 0x3);
+
+        assert_eq!(0x204, chip8.program_counter);
+    }
+
+    #[test]
+    fn skip_instruction_if_vx_not_equals_vy_does_not_skips_when_equal() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.variable_registers[0x3] = 0x34;
+        chip8.program_counter = 0x202;
+
+        chip8.skip_instruction_if_vx_not_equals_vy(0x2, 0x3);
+
+        assert_eq!(0x202, chip8.program_counter);
     }
 
     #[test]
@@ -631,5 +777,59 @@ mod tests {
 
         assert_eq!(0x200, chip8.program_counter);
         assert_eq!(0, chip8.stack_pointer);
+    }
+
+    #[test]
+    fn execute_next_instruction_can_execute_skip_instruction_if_vx_equals_nn() {
+        let mut chip8 = Chip8::new();
+        chip8.ram[0x200] = 0x33;
+        chip8.ram[0x201] = 0x34;
+        chip8.program_counter = 0x202;
+        chip8.variable_registers[0x03] = 0x34;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x204, chip8.program_counter);
+    }
+
+    #[test]
+    fn execute_next_instruction_can_execute_skip_instruction_if_vx_not_equals_nn() {
+        let mut chip8 = Chip8::new();
+        chip8.ram[0x200] = 0x33;
+        chip8.ram[0x201] = 0x34;
+        chip8.program_counter = 0x202;
+        chip8.variable_registers[0x03] = 0x35;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x204, chip8.program_counter);
+    }
+    
+    #[test]
+    fn execute_next_instruction_can_execute_skip_instruction_if_vx_equals_vy() {
+        let mut chip8 = Chip8::new();
+        chip8.ram[0x200] = 0x53;
+        chip8.ram[0x201] = 0x20;
+        chip8.program_counter = 0x202;
+        chip8.variable_registers[0x02] = 0x34;
+        chip8.variable_registers[0x03] = 0x34;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x204, chip8.program_counter);
+    }
+
+    #[test]
+    fn execute_next_instruction_can_execute_skip_instruction_if_vx_not_equals_vy() {
+        let mut chip8 = Chip8::new();
+        chip8.ram[0x200] = 0x93;
+        chip8.ram[0x201] = 0x20;
+        chip8.program_counter = 0x202;
+        chip8.variable_registers[0x02] = 0x34;
+        chip8.variable_registers[0x03] = 0x35;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x204, chip8.program_counter);
     }
 }
