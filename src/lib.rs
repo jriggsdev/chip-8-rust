@@ -58,6 +58,8 @@ enum Chip8Instruction {
     SkipInstructionIfVxEqualsVy(u8, u8),
     /// Instruction to skip the next instruction if VX != VY
     SkipInstructionIfVxNotEqualsVy(u8, u8),
+    /// Instruction to set Vx to the value of Vy
+    SetVxToVy(u8, u8),
 }
 
 /// Represents a 16-bit opcode
@@ -112,6 +114,12 @@ impl OpCode {
             0x5000..=0x5FFF => Ok(Chip8Instruction::SkipInstructionIfVxEqualsVy(self.x(), self.y())),
             0x6000..=0x6FFF => Ok(Chip8Instruction::SetVariableRegister(self.x(), self.nn())),
             0x7000..=0x7FFF => Ok(Chip8Instruction::AddToVariableRegister(self.x(), self.nn())),
+            0x8000..=0x8FFF => {
+                match self.n() {
+                    0x0 => Ok(Chip8Instruction::SetVxToVy(self.x(), self.y())),
+                    _ => Err(format!("Encountered invalid opcode {:X}", self.opcode)) // TODO test this case
+                }
+            },
             0x9000..=0x9FFF => Ok(Chip8Instruction::SkipInstructionIfVxNotEqualsVy(self.x(), self.y())),
             0xA000..=0xAFFF => Ok(Chip8Instruction::SetIndexRegister(self.nnn())),
             0xD000..=0xDFFF => Ok(Chip8Instruction::Draw(self.x(), self.y(), self.n())),
@@ -201,6 +209,7 @@ impl Chip8 {
                 Chip8Instruction::SkipInstructionIfVxNotEqualsNn(x, nn) => self.skip_instruction_if_vx_not_equals_nn(x, nn),
                 Chip8Instruction::SkipInstructionIfVxEqualsVy(x, y) => self.skip_instruction_if_vx_equals_vy(x, y),
                 Chip8Instruction::SkipInstructionIfVxNotEqualsVy(x, y) => self.skip_instruction_if_vx_not_equals_vy(x, y),
+                Chip8Instruction::SetVxToVy(x, y) => self.set_vx_to_vy(x, y),
             };
         }
     }
@@ -315,6 +324,11 @@ impl Chip8 {
         if self.variable_registers[x as usize] != self.variable_registers[y as usize] {
             self.program_counter += 2;
         }
+    }
+
+    /// Sets value in variable register at index x to the value in variable register at index y
+    fn set_vx_to_vy(&mut self, x: u8, y: u8) {
+        self.variable_registers[x as usize] = self.variable_registers[y as usize];
     }
 }
 
@@ -665,6 +679,18 @@ mod tests {
     }
 
     #[test]
+    fn can_set_vx_to_vy() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.variable_registers[0xF] = 0xAF;
+        chip8.program_counter = 0x202;
+
+        chip8.set_vx_to_vy(0x2, 0xF);
+
+        assert_eq!(0xAF, chip8.variable_registers[0x2]);
+    }
+
+    #[test]
     fn execute_next_instruction_can_execute_clear_screen() {
         let mut chip8 = Chip8::new();
         chip8.ram[0x200] = 0x00;
@@ -804,7 +830,7 @@ mod tests {
 
         assert_eq!(0x204, chip8.program_counter);
     }
-    
+
     #[test]
     fn execute_next_instruction_can_execute_skip_instruction_if_vx_equals_vy() {
         let mut chip8 = Chip8::new();
@@ -831,5 +857,19 @@ mod tests {
         chip8.execute_next_instruction();
 
         assert_eq!(0x204, chip8.program_counter);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_set_vx_to_vy() {
+        let mut chip8 = Chip8::new();
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0x82;
+        chip8.ram[0x201] = 0xF0;
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.variable_registers[0xF] = 0xAF;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0xAF, chip8.variable_registers[0x2]);
     }
 }
