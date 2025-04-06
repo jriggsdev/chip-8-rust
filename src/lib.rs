@@ -60,6 +60,8 @@ enum Chip8Instruction {
     SkipInstructionIfVxNotEqualsVy(u8, u8),
     /// Instruction to set Vx to the value of Vy
     SetVxToVy(u8, u8),
+    /// Instruction to set Vx to the binary or of Vx and Vy
+    BinaryOrVxWithVy(u8, u8),
 }
 
 /// Represents a 16-bit opcode
@@ -117,6 +119,7 @@ impl OpCode {
             0x8000..=0x8FFF => {
                 match self.n() {
                     0x0 => Ok(Chip8Instruction::SetVxToVy(self.x(), self.y())),
+                    0x1 => Ok(Chip8Instruction::BinaryOrVxWithVy(self.x(), self.y())),
                     _ => Err(format!("Encountered invalid opcode {:X}", self.opcode)) // TODO test this case
                 }
             },
@@ -210,6 +213,7 @@ impl Chip8 {
                 Chip8Instruction::SkipInstructionIfVxEqualsVy(x, y) => self.skip_instruction_if_vx_equals_vy(x, y),
                 Chip8Instruction::SkipInstructionIfVxNotEqualsVy(x, y) => self.skip_instruction_if_vx_not_equals_vy(x, y),
                 Chip8Instruction::SetVxToVy(x, y) => self.set_vx_to_vy(x, y),
+                Chip8Instruction::BinaryOrVxWithVy(x, y) => self.binary_or_vx_with_vy(x, y),
             };
         }
     }
@@ -329,6 +333,12 @@ impl Chip8 {
     /// Sets value in variable register at index x to the value in variable register at index y
     fn set_vx_to_vy(&mut self, x: u8, y: u8) {
         self.variable_registers[x as usize] = self.variable_registers[y as usize];
+    }
+
+    /// Sets value in variable register x to the result of doing a binary or with the value
+    /// in variable register x and the value in variable register y
+    fn binary_or_vx_with_vy(&mut self, x: u8, y: u8) {
+        self.variable_registers[x as usize] |= self.variable_registers[y as usize];
     }
 }
 
@@ -691,6 +701,17 @@ mod tests {
     }
 
     #[test]
+    fn can_binary_or_vx_with_vy() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.variable_registers[0xF] = 0xAF;
+
+        chip8.binary_or_vx_with_vy(0x2, 0xF);
+
+        assert_eq!(0x34 | 0xAF, chip8.variable_registers[0x2]);
+    }
+
+    #[test]
     fn execute_next_instruction_can_execute_clear_screen() {
         let mut chip8 = Chip8::new();
         chip8.ram[0x200] = 0x00;
@@ -871,5 +892,19 @@ mod tests {
         chip8.execute_next_instruction();
 
         assert_eq!(0xAF, chip8.variable_registers[0x2]);
+    }
+    
+    #[test]
+    fn execute_instruction_can_execute_binary_or_vx_with_vy() {
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = 0x34;
+        chip8.variable_registers[0xF] = 0xAF;
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0x82;
+        chip8.ram[0x201] = 0xF1;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x34 | 0xAF, chip8.variable_registers[0x2]);
     }
 }
