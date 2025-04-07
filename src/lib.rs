@@ -66,6 +66,10 @@ enum Chip8Instruction {
     BinaryAndVxWithVy(u8, u8),
     /// Instruction to set Vx to the binary xor of Vx and Vy
     BinaryXorVxWithVy(u8, u8),
+    /// Instruction to add Vy to Vx
+    AddVyToVx(u8, u8),
+    SubtractVyFromVx(u8, u8),
+    SubtractVxFromVyIntoVx(u8, u8),
 }
 
 /// Represents a 16-bit opcode
@@ -126,10 +130,10 @@ impl OpCode {
                     0x1 => Ok(Chip8Instruction::BinaryOrVxWithVy(self.x(), self.y())),
                     0x2 => Ok(Chip8Instruction::BinaryAndVxWithVy(self.x(), self.y())),
                     0x3 => Ok(Chip8Instruction::BinaryXorVxWithVy(self.x(), self.y())),
-                    // 0x4 => todo!(),
-                    // 0x5 => todo!(),
+                    0x4 => Ok(Chip8Instruction::AddVyToVx(self.x(), self.y())),
+                    0x5 => Ok(Chip8Instruction::SubtractVyFromVx(self.x(), self.y())),
                     // 0x6 => todo!(),
-                    // 0x7 => todo!(),
+                    0x7 => Ok(Chip8Instruction::SubtractVxFromVyIntoVx(self.x(), self.y())),
                     // 0xE => todo!(),
                     _ => Err(format!("Encountered invalid opcode {:X}", self.opcode)) // TODO test this case
                 }
@@ -250,6 +254,9 @@ impl Chip8 {
                 Chip8Instruction::BinaryOrVxWithVy(x, y) => self.binary_or_vx_with_vy(x, y),
                 Chip8Instruction::BinaryAndVxWithVy(x, y) => self.binary_and_vx_with_vy(x, y),
                 Chip8Instruction::BinaryXorVxWithVy(x, y) => self.binary_xor_vx_with_vy(x, y),
+                Chip8Instruction::AddVyToVx(x, y) => self.add_vy_to_vx(x, y),
+                Chip8Instruction::SubtractVyFromVx(x, y) => self.subtract_vy_from_vx(x, y),
+                Chip8Instruction::SubtractVxFromVyIntoVx(x, y) => self.subtract_vx_from_vy_into_vx(x, y),
             };
         }
     }
@@ -387,6 +394,52 @@ impl Chip8 {
     /// in variable register x and the value in variable register y
     fn binary_xor_vx_with_vy(&mut self, x: u8, y: u8) {
         self.variable_registers[x as usize] ^= self.variable_registers[y as usize];
+    }
+
+    /// Adds VY to VX. If the sum of VY and VX would overflow the 8-bit register VF is set to 1,
+    /// otherwise it's set to 0
+    fn add_vy_to_vx(&mut self, x: u8, y: u8) {
+        let x_val = self.variable_registers[x as usize];
+        let y_val = self.variable_registers[y as usize];
+
+        if x_val > 0xFF - y_val {
+            self.variable_registers[0xF] = 1;
+        } else {
+            self.variable_registers[0xF] = 0;
+        }
+
+        self.variable_registers[x as usize] = x_val.wrapping_add(y_val);
+    }
+
+    /// Subtracts VY from VX. If VX is less than VY and the subtraction would overflow VF is set to
+    /// 0, otherwise it's set to 1
+    fn subtract_vy_from_vx(&mut self, x: u8, y: u8) {
+        let x_val = self.variable_registers[x as usize];
+        let y_val = self.variable_registers[y as usize];
+
+        if x_val < y_val {
+            self.variable_registers[0xF] = 0;
+        } else {
+            self.variable_registers[0xF] = 1;
+        }
+
+        self.variable_registers[x as usize] = x_val.wrapping_sub(y_val);
+    }
+
+    /// Subtracts VX from VY and puts the result in VX. If VY is less than VX and the subtraction
+    /// would overflow VF is set to 0, otherwise it's set to 1
+    fn subtract_vx_from_vy_into_vx(&mut self, x: u8, y: u8) {
+        let x_val = self.variable_registers[x as usize];
+        let y_val = self.variable_registers[y as usize];
+
+        if y_val < x_val {
+            self.variable_registers[0xF] = 0;
+        }
+        else {
+            self.variable_registers[0xF] = 1;
+        }
+
+        self.variable_registers[x as usize] = y_val.wrapping_sub(x_val);
     }
 }
 
@@ -752,9 +805,9 @@ mod tests {
     fn can_binary_or_vx_with_vy() {
         let mut chip8 = Chip8::new();
         chip8.variable_registers[0x2] = 0x34;
-        chip8.variable_registers[0xF] = 0xAF;
+        chip8.variable_registers[0xC] = 0xAF;
 
-        chip8.binary_or_vx_with_vy(0x2, 0xF);
+        chip8.binary_or_vx_with_vy(0x2, 0xC);
 
         assert_eq!(0x34 | 0xAF, chip8.variable_registers[0x2]);
     }
@@ -763,9 +816,9 @@ mod tests {
     fn can_binary_and_vx_with_vy() {
         let mut chip8 = Chip8::new();
         chip8.variable_registers[0x2] = 0x34;
-        chip8.variable_registers[0xF] = 0xAF;
+        chip8.variable_registers[0xC] = 0xAF;
 
-        chip8.binary_and_vx_with_vy(0x2, 0xF);
+        chip8.binary_and_vx_with_vy(0x2, 0xC);
 
         assert_eq!(0x34 & 0xAF, chip8.variable_registers[0x2]);
     }
@@ -774,11 +827,101 @@ mod tests {
     fn can_binary_xor_vx_with_vy() {
         let mut chip8 = Chip8::new();
         chip8.variable_registers[0x2] = 0x34;
-        chip8.variable_registers[0xF] = 0xAF;
+        chip8.variable_registers[0xC] = 0xAF;
 
-        chip8.binary_xor_vx_with_vy(0x2, 0xF);
+        chip8.binary_xor_vx_with_vy(0x2, 0xC);
 
         assert_eq!(0x34 ^ 0xAF, chip8.variable_registers[0x2]);
+    }
+
+    #[test]
+    fn can_add_vy_to_vx() {
+        let x_val: u8 = 0x34;
+        let y_val: u8 = 0xAF;
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = x_val;
+        chip8.variable_registers[0xC] = y_val;
+        chip8.variable_registers[0xF] = 0x01;
+
+        chip8.add_vy_to_vx(0x2, 0xC);
+
+        assert_eq!(x_val + y_val, chip8.variable_registers[0x2]);
+        assert_eq!(0x0, chip8.variable_registers[0xF]);
+    }
+
+    #[test]
+    fn can_add_vy_to_vx_with_carry() {
+        let x_val: u8 = 0xD4;
+        let y_val: u8 = 0xAF;
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = x_val;
+        chip8.variable_registers[0xC] = y_val;
+        chip8.variable_registers[0xF] = 0x00;
+
+        chip8.add_vy_to_vx(0x2, 0xC);
+
+        assert_eq!(x_val.wrapping_add(y_val), chip8.variable_registers[0x2]);
+        assert_eq!(0x1, chip8.variable_registers[0xF]);
+    }
+
+    #[test]
+    fn can_subtract_vy_from_vx() {
+        let x_val: u8 = 0xAF;
+        let y_val: u8 = 0x34;
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = x_val;
+        chip8.variable_registers[0xC] = y_val;
+        chip8.variable_registers[0xF] = 0x00;
+
+        chip8.subtract_vy_from_vx(0x2, 0xC);
+
+        assert_eq!(x_val.wrapping_sub(y_val), chip8.variable_registers[0x2]);
+        assert_eq!(0x1, chip8.variable_registers[0xF]);
+    }
+
+    #[test]
+    fn can_subtract_vy_from_vx_with_borrow() {
+        let x_val: u8 = 0x34;
+        let y_val: u8 = 0xAF;
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = x_val;
+        chip8.variable_registers[0xC] = y_val;
+        chip8.variable_registers[0xF] = 0x01;
+
+        chip8.subtract_vy_from_vx(0x2, 0xC);
+
+        assert_eq!(x_val.wrapping_sub(y_val), chip8.variable_registers[0x2]);
+        assert_eq!(0x0, chip8.variable_registers[0xF]);
+    }
+
+    #[test]
+    fn can_subtract_vx_from_vy_into_vx() {
+        let x_val: u8 = 0x34;
+        let y_val: u8 = 0xAF;
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = x_val;
+        chip8.variable_registers[0xC] = y_val;
+        chip8.variable_registers[0xF] = 0x00;
+
+        chip8.subtract_vx_from_vy_into_vx(0x2, 0xC);
+
+        assert_eq!(y_val.wrapping_sub(x_val), chip8.variable_registers[0x2]);
+        assert_eq!(0x1, chip8.variable_registers[0xF]);
+    }
+
+    #[test]
+    fn can_subtract_vx_from_vy_into_vx_with_borrow() {
+        let x_val: u8 = 0xAF;
+        let y_val: u8 = 0x34;
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = x_val;
+        chip8.variable_registers[0xC] = y_val;
+        chip8.variable_registers[0xF] = 0x01;
+
+        chip8.subtract_vx_from_vy_into_vx(0x2, 0xC);
+
+        assert_eq!(y_val.wrapping_sub(x_val), chip8.variable_registers[0x2]);
+        assert_eq!(0x0, chip8.variable_registers[0xF]);
     }
 
     #[test]
@@ -1004,5 +1147,57 @@ mod tests {
         chip8.execute_next_instruction();
 
         assert_eq!(0x34 ^ 0xAF, chip8.variable_registers[0x2]);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_add_vy_to_vx() {
+        let x_val: u8 = 0x34;
+        let y_val: u8 = 0xAF;
+        let mut chip8 = Chip8::new();
+
+        chip8.variable_registers[0x2] = x_val;
+        chip8.variable_registers[0xC] = y_val;
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0x82;
+        chip8.ram[0x201] = 0xC4;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(x_val + y_val, chip8.variable_registers[0x2]);
+        assert_eq!(0x0, chip8.variable_registers[0xF]);
+    }
+    
+    #[test]
+    fn execute_instruction_can_execute_subtract_vy_from_vx() {
+        let x_val: u8 = 0xAF;
+        let y_val: u8 = 0x34;
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = x_val;
+        chip8.variable_registers[0xC] = y_val;
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0x82;
+        chip8.ram[0x201] = 0xC5;
+        
+        chip8.execute_next_instruction();
+        
+        assert_eq!(x_val.wrapping_sub(y_val), chip8.variable_registers[0x2]);
+        assert_eq!(0x1, chip8.variable_registers[0xF]);
+    }
+    
+    #[test]
+    fn execute_instruction_can_execute_subtract_vx_from_vy_into_vx() {
+        let x_val: u8 = 0x34;
+        let y_val: u8 = 0xAF;
+        let mut chip8 = Chip8::new();
+        chip8.variable_registers[0x2] = x_val;
+        chip8.variable_registers[0xC] = y_val;
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0x82;
+        chip8.ram[0x201] = 0xC7;   
+        
+        chip8.execute_next_instruction();
+        
+        assert_eq!(y_val.wrapping_sub(x_val), chip8.variable_registers[0x2]);
+        assert_eq!(0x1, chip8.variable_registers[0xF]);
     }
 }
