@@ -1425,4 +1425,18 @@ mod tests {
 
         assert_eq!(0x234 + 0x12, chip8.program_counter);
     }
+
+    #[test]
+    fn execute_instruction_can_execute_randomize_vx() {
+        let rng = StdRng::seed_from_u64(0);
+        let mut test_rng = rng.clone();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rng);
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0xC2;
+        chip8.ram[0x201] = 0x34;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(test_rng.random::<u8>() & 0x34, chip8.variable_registers[0x2]);
+    }
 }
