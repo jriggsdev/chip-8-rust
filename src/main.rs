@@ -1,3 +1,5 @@
+extern crate rand as rand_crate;
+
 use macroquad::prelude::*;
 use chip_8_emulator::{Chip8, DISPLAY_WIDTH, DISPLAY_HEIGHT, EmulatorType};
 
@@ -20,7 +22,7 @@ async fn render_frame(frame_buffer: &[u8; DISPLAY_WIDTH * DISPLAY_HEIGHT]) {
 #[macroquad::main("Chip-8 Emulator")]
 async fn main() {
     // TODO take Emulator type as a command line argument
-    let mut chip8 = Chip8::new(EmulatorType::Chip48);
+    let mut chip8 = Chip8::new(EmulatorType::Chip48, rand_crate::rng());
     let program = include_bytes!("/home/josh/Downloads/test_opcode.ch8");
     chip8.load_program(program);
 
@@ -30,7 +32,7 @@ async fn main() {
         chip8.execute_next_instruction();
         fb.copy_from_slice(chip8.frame_buffer());
 
-        if (counter % 12 == 0) {
+        if counter % 12 == 0 {
             render_frame(chip8.frame_buffer()).await;
         }
         counter = counter.wrapping_add(1);

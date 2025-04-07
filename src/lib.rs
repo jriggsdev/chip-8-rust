@@ -1,3 +1,5 @@
+use rand::{Rng};
+
 /// The emulators display width in pixels
 pub const DISPLAY_WIDTH: usize = 64;
 
@@ -88,6 +90,12 @@ enum Chip8Instruction {
     /// For CHIP-48 this just shifts Vx one bit to the left ignoring Vy.
     /// In both cases VF is set to the bit that is shifted out.
     ShiftVxLeft(u8, u8),
+    /// Ambiguous instruction depending on emulator type.
+    /// For COSMAC-VIP this jumps to the address NNN plus the value in V0
+    /// For CHIP-48 it will jump to the address XNN plus the value in VX
+    JumpWithOffset(u16),
+    /// Instruction to generate a random number, binary and it with NN and put the result in VX
+    RandomizeVx(u8, u8),
 }
 
 /// Represents a 16-bit opcode
@@ -158,8 +166,8 @@ impl OpCode {
             },
             0x9000..=0x9FFF => Ok(Chip8Instruction::SkipInstructionIfVxNotEqualsVy(self.x(), self.y())),
             0xA000..=0xAFFF => Ok(Chip8Instruction::SetIndexRegister(self.nnn())),
-            // 0xB000..=0xBFFF => todo!(),
-            // 0xC000..=0xCFFF => todo!(),
+            0xB000..=0xBFFF => Ok(Chip8Instruction::JumpWithOffset(self.nnn())),
+            0xC000..=0xCFFF => Ok(Chip8Instruction::RandomizeVx(self.x(), self.nn())),
             0xD000..=0xDFFF => Ok(Chip8Instruction::Draw(self.x(), self.y(), self.n())),
             0xE000..=0xEFFF => {
                 match self.nn() {
@@ -189,7 +197,7 @@ impl OpCode {
 
 /// Represents a Chip8 interpreter
 #[derive(Debug)]
-pub struct Chip8 {
+pub struct Chip8<R: Rng> {
     /// [`MEMORY_SIZE`] bytes of memory
     ram: [u8; MEMORY_SIZE],
     /// frame buffer for drawing screen
@@ -209,18 +217,12 @@ pub struct Chip8 {
     /// [`VARIABLE_REGISTER_COUNT`] 8-bit variable registers
     variable_registers: [u8; VARIABLE_REGISTER_COUNT],
     emulator_type: EmulatorType,
+    rng: R
 }
 
-impl Default for Chip8 {
-    /// Creates a default Chip8 instance
-    fn default() -> Self {
-        Self::new(EmulatorType::CosmacVip)
-    }
-}
-
-impl Chip8 {
+impl<R: Rng> Chip8<R> {
     /// Creates a new Chip8 instance
-    pub fn new(emulator_type: EmulatorType) -> Self {
+    pub fn new(emulator_type: EmulatorType, rng: R) -> Self {
         let mut chip8 = Self {
             ram: [0; MEMORY_SIZE],
             frame_buffer: [0; DISPLAY_WIDTH * DISPLAY_HEIGHT],
@@ -232,6 +234,7 @@ impl Chip8 {
             index_register: 0,
             variable_registers: [0; VARIABLE_REGISTER_COUNT],
             emulator_type,
+            rng
         };
 
         chip8.ram[0x050..0x050 + FONT.len()].copy_from_slice(&FONT);
@@ -279,6 +282,8 @@ impl Chip8 {
                 Chip8Instruction::SubtractVxFromVyIntoVx(x, y) => self.subtract_vx_from_vy_into_vx(x, y),
                 Chip8Instruction::ShiftVxRight(x, y) => self.shift_vx_right(x, y),
                 Chip8Instruction::ShiftVxLeft(x, y) => self.shift_vx_left(x, y),
+                Chip8Instruction::JumpWithOffset(nnn) => self.jump_with_offset(nnn),
+                Chip8Instruction::RandomizeVx(x, nn) => self.randomize_vx(x, nn),
             };
         }
     }
@@ -487,10 +492,29 @@ impl Chip8 {
         self.variable_registers[0xF] = (self.variable_registers[x as usize] >> 7) & 0x01;
         self.variable_registers[x as usize] <<= 1;
     }
+
+    /// If the emulator type is CosmacVip this will jump to address NNN plus the value in V0
+    /// If the emulator type is Chip48 this will jump to address XNN plus the value in VX
+    fn jump_with_offset(&mut self, nnn: u16) {
+        let offset = match self.emulator_type {
+            EmulatorType::CosmacVip => self.variable_registers[0] as u16,
+            EmulatorType::Chip48 => self.variable_registers[(nnn & 0x0F00) as usize >> 8] as u16,
+        };
+
+        self.jump(nnn.wrapping_add(offset));
+    }
+
+    /// Generates a random number, does a binary and with nn and puts the value in Vx
+    fn randomize_vx(&mut self, x: u8, nn: u8) {
+        let random_number = self.rng.random::<u8>();
+        self.variable_registers[x as usize] = random_number & nn;
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
     use super::*;
 
     fn draw_test_sprite(x_offset: u8, y_offset: u8, sprite_bytes: &[u8]) -> [u8; DISPLAY_WIDTH * DISPLAY_HEIGHT] {
@@ -511,7 +535,7 @@ mod tests {
 
     #[test]
     fn can_create_new_chip_8() {
-        let chip8 = Chip8::new(EmulatorType::CosmacVip);
+        let chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
 
         let mut expected_ram = [0; MEMORY_SIZE];
         expected_ram[0x050..0x050 + FONT.len()].copy_from_slice(&FONT);
@@ -539,7 +563,7 @@ mod tests {
 
     #[test]
     fn can_create_new_chip_8_with_chip_48_type() {
-        let chip8 = Chip8::new(EmulatorType::Chip48);
+        let chip8 = Chip8::new(EmulatorType::Chip48, rand::rng());
 
         assert_eq!(EmulatorType::Chip48, chip8.emulator_type);
     }
@@ -599,7 +623,7 @@ mod tests {
 
     #[test]
     fn can_load_program() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         let program = [0x00, 0xE0, 0x12, 0x34, 0x56, 0x78];
         chip8.load_program(&program);
 
@@ -609,7 +633,7 @@ mod tests {
 
     #[test]
     fn can_fetch_next_instruction() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x00;
         chip8.ram[0x201] = 0xE0;
         chip8.program_counter = 0x200;
@@ -620,7 +644,7 @@ mod tests {
 
     #[test]
     fn can_clear_screen() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.frame_buffer = [1; DISPLAY_WIDTH * DISPLAY_HEIGHT];
         chip8.clear_screen();
         assert_eq!([0; DISPLAY_WIDTH * DISPLAY_HEIGHT], chip8.frame_buffer);
@@ -628,7 +652,7 @@ mod tests {
 
     #[test]
     fn can_jump() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.program_counter = 0x200;
         chip8.jump(0x300);
         assert_eq!(0x300, chip8.program_counter);
@@ -636,7 +660,7 @@ mod tests {
 
     #[test]
     fn can_set_variable_register() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
 
         chip8.set_variable_register(0x2, 0x34);
         chip8.set_variable_register(0x7, 0xAA);
@@ -647,7 +671,7 @@ mod tests {
 
     #[test]
     fn can_add_to_variable_register() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
 
         chip8.set_variable_register(0x2, 0x34);
         chip8.set_variable_register(0x7, 0xAA);
@@ -667,7 +691,7 @@ mod tests {
         let initial_value: u8 = 0xF3;
         let value_to_add: u8 = 0x34;
         let expected_result = initial_value.wrapping_add(value_to_add);
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
 
         chip8.set_variable_register(0x2, initial_value);
 
@@ -680,7 +704,7 @@ mod tests {
 
     #[test]
     fn can_set_index_register() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.set_index_register(0x300);
         assert_eq!(0x300, chip8.index_register);
     }
@@ -691,7 +715,7 @@ mod tests {
         let y_offset = 12;
         let sprite_bytes = [0b11111111, 0b01010101, 0b00000000, 0b11011101];
         let expected_frame_buffer = draw_test_sprite(x_offset, y_offset, &sprite_bytes);
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
 
         chip8.frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
         chip8.ram[0x300..0x304].copy_from_slice(&sprite_bytes);
@@ -710,7 +734,7 @@ mod tests {
         let y_offset = 30;
         let sprite_bytes = [0b11111111, 0b01010101, 0b00000000, 0b11011101];
         let expected_frame_buffer = draw_test_sprite(x_offset, y_offset, &sprite_bytes);
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
 
         chip8.frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
         chip8.ram[0x300..0x304].copy_from_slice(&sprite_bytes);
@@ -725,7 +749,7 @@ mod tests {
 
     #[test]
     fn can_call_subroutine() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.program_counter = 0x202;
 
         chip8.call_subroutine(0x300);
@@ -737,7 +761,7 @@ mod tests {
 
     #[test]
     fn can_return_from_subroutine() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.stack[0] = 0x200;
 
         chip8.call_subroutine(0x300);
@@ -752,7 +776,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_equals_nn_skips_when_equal() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.program_counter = 0x202;
 
@@ -763,7 +787,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_equals_nn_does_not_skips_when_not_equal() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.program_counter = 0x202;
 
@@ -774,7 +798,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_not_equals_nn_skips_when_not_equal() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.program_counter = 0x202;
 
@@ -785,7 +809,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_not_equals_nn_does_not_skips_when_equal() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.program_counter = 0x202;
 
@@ -796,7 +820,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_equals_vy_skips_when_equal() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0x3] = 0x34;
         chip8.program_counter = 0x202;
@@ -808,7 +832,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_equals_vy_does_not_skips_when_not_equal() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0x3] = 0x35;
         chip8.program_counter = 0x202;
@@ -820,7 +844,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_not_equals_vy_skips_when_not_equal() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0x3] = 0x35;
         chip8.program_counter = 0x202;
@@ -832,7 +856,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_not_equals_vy_does_not_skips_when_equal() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0x3] = 0x34;
         chip8.program_counter = 0x202;
@@ -844,7 +868,7 @@ mod tests {
 
     #[test]
     fn can_set_vx_to_vy() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xF] = 0xAF;
         chip8.program_counter = 0x202;
@@ -856,7 +880,7 @@ mod tests {
 
     #[test]
     fn can_binary_or_vx_with_vy() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xC] = 0xAF;
 
@@ -867,7 +891,7 @@ mod tests {
 
     #[test]
     fn can_binary_and_vx_with_vy() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xC] = 0xAF;
 
@@ -878,7 +902,7 @@ mod tests {
 
     #[test]
     fn can_binary_xor_vx_with_vy() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xC] = 0xAF;
 
@@ -891,7 +915,7 @@ mod tests {
     fn can_add_vy_to_vx() {
         let x_val: u8 = 0x34;
         let y_val: u8 = 0xAF;
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.variable_registers[0xF] = 0x01;
@@ -906,7 +930,7 @@ mod tests {
     fn can_add_vy_to_vx_with_carry() {
         let x_val: u8 = 0xD4;
         let y_val: u8 = 0xAF;
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.variable_registers[0xF] = 0x00;
@@ -921,7 +945,7 @@ mod tests {
     fn can_subtract_vy_from_vx() {
         let x_val: u8 = 0xAF;
         let y_val: u8 = 0x34;
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.variable_registers[0xF] = 0x00;
@@ -936,7 +960,7 @@ mod tests {
     fn can_subtract_vy_from_vx_with_borrow() {
         let x_val: u8 = 0x34;
         let y_val: u8 = 0xAF;
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.variable_registers[0xF] = 0x01;
@@ -951,7 +975,7 @@ mod tests {
     fn can_subtract_vx_from_vy_into_vx() {
         let x_val: u8 = 0x34;
         let y_val: u8 = 0xAF;
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.variable_registers[0xF] = 0x00;
@@ -966,7 +990,7 @@ mod tests {
     fn can_subtract_vx_from_vy_into_vx_with_borrow() {
         let x_val: u8 = 0xAF;
         let y_val: u8 = 0x34;
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.variable_registers[0xF] = 0x01;
@@ -979,7 +1003,7 @@ mod tests {
 
     #[test]
     fn can_shift_vx_right_for_cosmac_vip() {
-        let mut chip8 = Chip8::new(EmulatorType::CosmacVip);
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x00;
         chip8.variable_registers[0xC] = 0x13;
 
@@ -991,7 +1015,7 @@ mod tests {
 
     #[test]
     fn can_shift_vx_right_for_chip_48() {
-        let mut chip8 = Chip8::new(EmulatorType::Chip48);
+        let mut chip8 = Chip8::new(EmulatorType::Chip48, rand::rng());
         chip8.variable_registers[0x2] = 0x13;
         chip8.variable_registers[0xC] = 0x34;
 
@@ -1003,7 +1027,7 @@ mod tests {
 
     #[test]
     fn can_shift_vx_left_for_cosmac_vip() {
-        let mut chip8 = Chip8::new(EmulatorType::CosmacVip);
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x00;
         chip8.variable_registers[0xC] = 0x13;
         chip8.variable_registers[0xF] = 0x01;
@@ -1016,7 +1040,7 @@ mod tests {
 
     #[test]
     fn can_shift_vx_left_for_chip_48() {
-        let mut chip8 = Chip8::new(EmulatorType::Chip48);
+        let mut chip8 = Chip8::new(EmulatorType::Chip48, rand::rng());
         chip8.variable_registers[0x2] = 0x13;
         chip8.variable_registers[0xC] = 0x34;
         chip8.variable_registers[0xF] = 0x01;
@@ -1028,8 +1052,65 @@ mod tests {
     }
 
     #[test]
+    fn can_jump_with_offset_for_cosmac_vip() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+        chip8.program_counter = 0x202;
+        chip8.variable_registers[0x0] = 0x12;
+
+        chip8.jump_with_offset(0x123);
+
+        assert_eq!(0x12 + 0x123, chip8.program_counter);
+    }
+
+    #[test]
+    fn jump_with_offset_does_wrapping_add_for_cosmac_vip() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+        chip8.program_counter = 0x202;
+        chip8.variable_registers[0x0] = 0x002;
+
+        chip8.jump_with_offset(0xFFF);
+
+        assert_eq!(0x002u16.wrapping_add(0xFFF), chip8.program_counter);
+    }
+
+    #[test]
+    fn can_jump_with_offset_for_chip_48() {
+        let mut chip8 = Chip8::new(EmulatorType::Chip48, rand::rng());
+        chip8.program_counter = 0x202;
+        chip8.variable_registers[0x2] = 0x12;
+
+        chip8.jump_with_offset(0x223);
+
+        assert_eq!(0x12 + 0x223, chip8.program_counter);
+    }
+
+    #[test]
+    fn jump_with_offset_does_wrapping_add_for_chip_48() {
+        let mut chip8 = Chip8::new(EmulatorType::Chip48, rand::rng());
+        chip8.program_counter = 0x202;
+        chip8.variable_registers[0xF] = 0x02;
+
+        chip8.jump_with_offset(0xFFF);
+
+        assert_eq!(0x02u16.wrapping_add(0xFFF), chip8.program_counter);
+    }
+    
+    #[test]
+    fn can_randomize_vx() {
+        let rng = StdRng::seed_from_u64(0);
+        let mut test_rng = rng.clone();
+        
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rng);
+        
+        chip8.randomize_vx(2, 0x34);
+        
+        let random_val = test_rng.random::<u8>();
+        assert_eq!(random_val & 0x34, chip8.variable_registers[2])
+    }
+
+    #[test]
     fn execute_next_instruction_can_execute_clear_screen() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x00;
         chip8.ram[0x201] = 0xE0;
         chip8.program_counter = 0x200;
@@ -1043,7 +1124,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_jump() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x12;
         chip8.ram[0x201] = 0x34;
         chip8.program_counter = 0x200;
@@ -1055,7 +1136,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_set_variable_register() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x63;
         chip8.ram[0x201] = 0xBC;
         chip8.program_counter = 0x200;
@@ -1068,7 +1149,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_add_to_variable_register() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x73;
         chip8.ram[0x201] = 0xBC;
         chip8.program_counter = 0x200;
@@ -1082,7 +1163,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_set_index_register() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0xA3;
         chip8.ram[0x201] = 0xBC;
         chip8.program_counter = 0x200;
@@ -1099,7 +1180,7 @@ mod tests {
         let y_offset = 12;
         let sprite_bytes = [0b11111111, 0b01010101, 0b00000000, 0b11011101];
         let expected_frame_buffer = draw_test_sprite(x_offset, y_offset, &sprite_bytes);
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
 
         chip8.ram[0x200] = 0xD2;
         chip8.ram[0x201] = 0x34;
@@ -1115,7 +1196,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_call_subroutine() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x22;
         chip8.ram[0x201] = 0x11;
         chip8.program_counter = 0x200;
@@ -1129,7 +1210,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_return_from_subroutine() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x211] = 0x00;
         chip8.ram[0x212] = 0xEE;
         chip8.program_counter = 0x211;
@@ -1144,7 +1225,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_skip_instruction_if_vx_equals_nn() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x33;
         chip8.ram[0x201] = 0x34;
         chip8.program_counter = 0x202;
@@ -1157,7 +1238,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_skip_instruction_if_vx_not_equals_nn() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x33;
         chip8.ram[0x201] = 0x34;
         chip8.program_counter = 0x202;
@@ -1170,7 +1251,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_skip_instruction_if_vx_equals_vy() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x53;
         chip8.ram[0x201] = 0x20;
         chip8.program_counter = 0x202;
@@ -1184,7 +1265,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_skip_instruction_if_vx_not_equals_vy() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x93;
         chip8.ram[0x201] = 0x20;
         chip8.program_counter = 0x202;
@@ -1198,7 +1279,7 @@ mod tests {
 
     #[test]
     fn execute_instruction_can_execute_set_vx_to_vy() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.program_counter = 0x200;
         chip8.ram[0x200] = 0x82;
         chip8.ram[0x201] = 0xF0;
@@ -1212,7 +1293,7 @@ mod tests {
     
     #[test]
     fn execute_instruction_can_execute_binary_or_vx_with_vy() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xF] = 0xAF;
         chip8.program_counter = 0x200;
@@ -1226,7 +1307,7 @@ mod tests {
 
     #[test]
     fn execute_instruction_can_execute_binary_and_vx_with_vy() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xF] = 0xAF;
         chip8.program_counter = 0x200;
@@ -1240,7 +1321,7 @@ mod tests {
 
     #[test]
     fn execute_instruction_can_execute_binary_xor_vx_with_vy() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xF] = 0xAF;
         chip8.program_counter = 0x200;
@@ -1256,7 +1337,7 @@ mod tests {
     fn execute_instruction_can_execute_add_vy_to_vx() {
         let x_val: u8 = 0x34;
         let y_val: u8 = 0xAF;
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
 
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
@@ -1274,7 +1355,7 @@ mod tests {
     fn execute_instruction_can_execute_subtract_vy_from_vx() {
         let x_val: u8 = 0xAF;
         let y_val: u8 = 0x34;
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.program_counter = 0x200;
@@ -1291,7 +1372,7 @@ mod tests {
     fn execute_instruction_can_execute_subtract_vx_from_vy_into_vx() {
         let x_val: u8 = 0x34;
         let y_val: u8 = 0xAF;
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.program_counter = 0x200;
@@ -1306,7 +1387,7 @@ mod tests {
 
     #[test]
     fn execute_instruction_can_execute_shift_vx_right() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x22;
         chip8.variable_registers[0xC] = 0x34;
         chip8.program_counter = 0x200;
@@ -1320,7 +1401,7 @@ mod tests {
 
     #[test]
     fn execute_instruction_can_execute_shift_vx_left() {
-        let mut chip8 = Chip8::default();
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.variable_registers[0x2] = 0x22;
         chip8.variable_registers[0xC] = 0x34;
         chip8.program_counter = 0x200;
@@ -1330,5 +1411,18 @@ mod tests {
         chip8.execute_next_instruction();
 
         assert_eq!(0x34 << 1, chip8.variable_registers[0x2]);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_jump_with_offset() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0xB2;
+        chip8.ram[0x201] = 0x34;
+        chip8.variable_registers[0x0] = 0x12;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x234 + 0x12, chip8.program_counter);
     }
 }
