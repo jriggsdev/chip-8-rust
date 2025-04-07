@@ -24,8 +24,15 @@ async fn main() {
     let program = include_bytes!("/home/josh/Downloads/test_opcode.ch8");
     chip8.load_program(program);
 
+    let mut fb = [ 0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
+    let mut counter: u8 = 0;
     loop {
         chip8.execute_next_instruction();
-        render_frame(chip8.frame_buffer()).await;
+        fb.copy_from_slice(chip8.frame_buffer());
+
+        if (counter % 12 == 0) {
+            render_frame(chip8.frame_buffer()).await;
+        }
+        counter = counter.wrapping_add(1);
     }
 }
