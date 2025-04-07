@@ -29,6 +29,12 @@ const FONT: [u8; 16 * 5] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80  // F
 ];
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum EmulatorType {
+    CosmacVip,
+    Chip48
+}
+
 /// Represents the set of Chip-8 instructions
 #[derive(Debug, PartialEq, Eq)]
 enum Chip8Instruction {
@@ -68,8 +74,20 @@ enum Chip8Instruction {
     BinaryXorVxWithVy(u8, u8),
     /// Instruction to add Vy to Vx
     AddVyToVx(u8, u8),
+    /// Instruction to subtract Vy from Vx
     SubtractVyFromVx(u8, u8),
+    /// Instruction to subtract Vx from Vy and put the result into Vx
     SubtractVxFromVyIntoVx(u8, u8),
+    /// Ambiguous instruction depending on emulator type.
+    /// For COSMAC-VIP this sets Vx to Vy then shifts Vx one bit to the right.
+    /// For CHIP-48 this just shifts Vx one bit to the right ignoring Vy.
+    /// In both cases VF is set to the bit that is shifted out.
+    ShiftVxRight(u8, u8),
+    /// Ambiguous instruction depending on emulator type.
+    /// For COSMAC-VIP this sets Vx to Vy then shifts Vx one bit to the left.
+    /// For CHIP-48 this just shifts Vx one bit to the left ignoring Vy.
+    /// In both cases VF is set to the bit that is shifted out.
+    ShiftVxLeft(u8, u8),
 }
 
 /// Represents a 16-bit opcode
@@ -132,9 +150,9 @@ impl OpCode {
                     0x3 => Ok(Chip8Instruction::BinaryXorVxWithVy(self.x(), self.y())),
                     0x4 => Ok(Chip8Instruction::AddVyToVx(self.x(), self.y())),
                     0x5 => Ok(Chip8Instruction::SubtractVyFromVx(self.x(), self.y())),
-                    // 0x6 => todo!(),
+                    0x6 => Ok(Chip8Instruction::ShiftVxRight(self.x(), self.y())),
                     0x7 => Ok(Chip8Instruction::SubtractVxFromVyIntoVx(self.x(), self.y())),
-                    // 0xE => todo!(),
+                    0xE => Ok(Chip8Instruction::ShiftVxLeft(self.x(), self.y())),
                     _ => Err(format!("Encountered invalid opcode {:X}", self.opcode)) // TODO test this case
                 }
             },
@@ -190,18 +208,19 @@ pub struct Chip8 {
     index_register: u16,
     /// [`VARIABLE_REGISTER_COUNT`] 8-bit variable registers
     variable_registers: [u8; VARIABLE_REGISTER_COUNT],
+    emulator_type: EmulatorType,
 }
 
 impl Default for Chip8 {
     /// Creates a default Chip8 instance
     fn default() -> Self {
-        Self::new()
+        Self::new(EmulatorType::CosmacVip)
     }
 }
 
 impl Chip8 {
     /// Creates a new Chip8 instance
-    pub fn new() -> Self {
+    pub fn new(emulator_type: EmulatorType) -> Self {
         let mut chip8 = Self {
             ram: [0; MEMORY_SIZE],
             frame_buffer: [0; DISPLAY_WIDTH * DISPLAY_HEIGHT],
@@ -212,6 +231,7 @@ impl Chip8 {
             program_counter: PROGRAM_START_ADDRESS,
             index_register: 0,
             variable_registers: [0; VARIABLE_REGISTER_COUNT],
+            emulator_type,
         };
 
         chip8.ram[0x050..0x050 + FONT.len()].copy_from_slice(&FONT);
@@ -257,6 +277,8 @@ impl Chip8 {
                 Chip8Instruction::AddVyToVx(x, y) => self.add_vy_to_vx(x, y),
                 Chip8Instruction::SubtractVyFromVx(x, y) => self.subtract_vy_from_vx(x, y),
                 Chip8Instruction::SubtractVxFromVyIntoVx(x, y) => self.subtract_vx_from_vy_into_vx(x, y),
+                Chip8Instruction::ShiftVxRight(x, y) => self.shift_vx_right(x, y),
+                Chip8Instruction::ShiftVxLeft(x, y) => self.shift_vx_left(x, y),
             };
         }
     }
@@ -441,6 +463,30 @@ impl Chip8 {
 
         self.variable_registers[x as usize] = y_val.wrapping_sub(x_val);
     }
+
+    /// If emulator type is CosmacVip sets VX to VY and shifts VX right 1 bit.
+    /// If emulator type is Chip48 just shifts VX right 1 bit.
+    /// In both cases sets VF to the shifted out bit
+    fn shift_vx_right(&mut self, x: u8, y: u8) {
+        if self.emulator_type == EmulatorType::CosmacVip {
+            self.variable_registers[x as usize] = self.variable_registers[y as usize];
+        }
+
+        self.variable_registers[0xF] = self.variable_registers[x as usize] & 0x01;
+        self.variable_registers[x as usize] >>= 1;
+    }
+
+    /// If emulator type is CosmacVip sets VX to VY and shifts VX left 1 bit.
+    /// If emulator type is Chip48 just shifts VX left 1 bit.
+    /// In both cases sets VF to the shifted out bit
+    fn shift_vx_left(&mut self, x: u8, y: u8) {
+        if self.emulator_type == EmulatorType::CosmacVip {
+            self.variable_registers[x as usize] = self.variable_registers[y as usize];
+        }
+
+        self.variable_registers[0xF] = (self.variable_registers[x as usize] >> 7) & 0x01;
+        self.variable_registers[x as usize] <<= 1;
+    }
 }
 
 #[cfg(test)]
@@ -465,8 +511,7 @@ mod tests {
 
     #[test]
     fn can_create_new_chip_8() {
-        let chip8 = Chip8::new();
-        Chip8::default();
+        let chip8 = Chip8::new(EmulatorType::CosmacVip);
 
         let mut expected_ram = [0; MEMORY_SIZE];
         expected_ram[0x050..0x050 + FONT.len()].copy_from_slice(&FONT);
@@ -489,6 +534,14 @@ mod tests {
         assert_eq!(expected_program_counter, chip8.program_counter);
         assert_eq!(expected_index_register, chip8.index_register);
         assert_eq!(expected_variable_registers, chip8.variable_registers);
+        assert_eq!(EmulatorType::CosmacVip, chip8.emulator_type);
+    }
+
+    #[test]
+    fn can_create_new_chip_8_with_chip_48_type() {
+        let chip8 = Chip8::new(EmulatorType::Chip48);
+
+        assert_eq!(EmulatorType::Chip48, chip8.emulator_type);
     }
 
     #[test]
@@ -546,7 +599,7 @@ mod tests {
 
     #[test]
     fn can_load_program() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         let program = [0x00, 0xE0, 0x12, 0x34, 0x56, 0x78];
         chip8.load_program(&program);
 
@@ -556,7 +609,7 @@ mod tests {
 
     #[test]
     fn can_fetch_next_instruction() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.ram[0x200] = 0x00;
         chip8.ram[0x201] = 0xE0;
         chip8.program_counter = 0x200;
@@ -567,7 +620,7 @@ mod tests {
 
     #[test]
     fn can_clear_screen() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.frame_buffer = [1; DISPLAY_WIDTH * DISPLAY_HEIGHT];
         chip8.clear_screen();
         assert_eq!([0; DISPLAY_WIDTH * DISPLAY_HEIGHT], chip8.frame_buffer);
@@ -575,7 +628,7 @@ mod tests {
 
     #[test]
     fn can_jump() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.program_counter = 0x200;
         chip8.jump(0x300);
         assert_eq!(0x300, chip8.program_counter);
@@ -583,7 +636,7 @@ mod tests {
 
     #[test]
     fn can_set_variable_register() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
 
         chip8.set_variable_register(0x2, 0x34);
         chip8.set_variable_register(0x7, 0xAA);
@@ -594,7 +647,7 @@ mod tests {
 
     #[test]
     fn can_add_to_variable_register() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
 
         chip8.set_variable_register(0x2, 0x34);
         chip8.set_variable_register(0x7, 0xAA);
@@ -614,7 +667,7 @@ mod tests {
         let initial_value: u8 = 0xF3;
         let value_to_add: u8 = 0x34;
         let expected_result = initial_value.wrapping_add(value_to_add);
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
 
         chip8.set_variable_register(0x2, initial_value);
 
@@ -627,7 +680,7 @@ mod tests {
 
     #[test]
     fn can_set_index_register() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.set_index_register(0x300);
         assert_eq!(0x300, chip8.index_register);
     }
@@ -638,7 +691,7 @@ mod tests {
         let y_offset = 12;
         let sprite_bytes = [0b11111111, 0b01010101, 0b00000000, 0b11011101];
         let expected_frame_buffer = draw_test_sprite(x_offset, y_offset, &sprite_bytes);
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
 
         chip8.frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
         chip8.ram[0x300..0x304].copy_from_slice(&sprite_bytes);
@@ -657,7 +710,7 @@ mod tests {
         let y_offset = 30;
         let sprite_bytes = [0b11111111, 0b01010101, 0b00000000, 0b11011101];
         let expected_frame_buffer = draw_test_sprite(x_offset, y_offset, &sprite_bytes);
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
 
         chip8.frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
         chip8.ram[0x300..0x304].copy_from_slice(&sprite_bytes);
@@ -672,7 +725,7 @@ mod tests {
 
     #[test]
     fn can_call_subroutine() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.program_counter = 0x202;
 
         chip8.call_subroutine(0x300);
@@ -684,7 +737,7 @@ mod tests {
 
     #[test]
     fn can_return_from_subroutine() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.stack[0] = 0x200;
 
         chip8.call_subroutine(0x300);
@@ -699,7 +752,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_equals_nn_skips_when_equal() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.program_counter = 0x202;
 
@@ -710,7 +763,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_equals_nn_does_not_skips_when_not_equal() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.program_counter = 0x202;
 
@@ -721,7 +774,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_not_equals_nn_skips_when_not_equal() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.program_counter = 0x202;
 
@@ -732,7 +785,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_not_equals_nn_does_not_skips_when_equal() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.program_counter = 0x202;
 
@@ -743,7 +796,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_equals_vy_skips_when_equal() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0x3] = 0x34;
         chip8.program_counter = 0x202;
@@ -755,7 +808,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_equals_vy_does_not_skips_when_not_equal() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0x3] = 0x35;
         chip8.program_counter = 0x202;
@@ -767,7 +820,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_not_equals_vy_skips_when_not_equal() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0x3] = 0x35;
         chip8.program_counter = 0x202;
@@ -779,7 +832,7 @@ mod tests {
 
     #[test]
     fn skip_instruction_if_vx_not_equals_vy_does_not_skips_when_equal() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0x3] = 0x34;
         chip8.program_counter = 0x202;
@@ -791,7 +844,7 @@ mod tests {
 
     #[test]
     fn can_set_vx_to_vy() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xF] = 0xAF;
         chip8.program_counter = 0x202;
@@ -803,7 +856,7 @@ mod tests {
 
     #[test]
     fn can_binary_or_vx_with_vy() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xC] = 0xAF;
 
@@ -814,7 +867,7 @@ mod tests {
 
     #[test]
     fn can_binary_and_vx_with_vy() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xC] = 0xAF;
 
@@ -825,7 +878,7 @@ mod tests {
 
     #[test]
     fn can_binary_xor_vx_with_vy() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xC] = 0xAF;
 
@@ -838,7 +891,7 @@ mod tests {
     fn can_add_vy_to_vx() {
         let x_val: u8 = 0x34;
         let y_val: u8 = 0xAF;
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.variable_registers[0xF] = 0x01;
@@ -853,7 +906,7 @@ mod tests {
     fn can_add_vy_to_vx_with_carry() {
         let x_val: u8 = 0xD4;
         let y_val: u8 = 0xAF;
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.variable_registers[0xF] = 0x00;
@@ -868,7 +921,7 @@ mod tests {
     fn can_subtract_vy_from_vx() {
         let x_val: u8 = 0xAF;
         let y_val: u8 = 0x34;
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.variable_registers[0xF] = 0x00;
@@ -883,7 +936,7 @@ mod tests {
     fn can_subtract_vy_from_vx_with_borrow() {
         let x_val: u8 = 0x34;
         let y_val: u8 = 0xAF;
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.variable_registers[0xF] = 0x01;
@@ -898,7 +951,7 @@ mod tests {
     fn can_subtract_vx_from_vy_into_vx() {
         let x_val: u8 = 0x34;
         let y_val: u8 = 0xAF;
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.variable_registers[0xF] = 0x00;
@@ -913,7 +966,7 @@ mod tests {
     fn can_subtract_vx_from_vy_into_vx_with_borrow() {
         let x_val: u8 = 0xAF;
         let y_val: u8 = 0x34;
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.variable_registers[0xF] = 0x01;
@@ -925,8 +978,58 @@ mod tests {
     }
 
     #[test]
+    fn can_shift_vx_right_for_cosmac_vip() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip);
+        chip8.variable_registers[0x2] = 0x00;
+        chip8.variable_registers[0xC] = 0x13;
+
+        chip8.shift_vx_right(0x2, 0xC);
+
+        assert_eq!(0x13 >> 1, chip8.variable_registers[0x2]);
+        assert_eq!(0x1, chip8.variable_registers[0xF]);
+    }
+
+    #[test]
+    fn can_shift_vx_right_for_chip_48() {
+        let mut chip8 = Chip8::new(EmulatorType::Chip48);
+        chip8.variable_registers[0x2] = 0x13;
+        chip8.variable_registers[0xC] = 0x34;
+
+        chip8.shift_vx_right(0x2, 0xC);
+
+        assert_eq!(0x13 >> 1, chip8.variable_registers[0x2]);
+        assert_eq!(0x1, chip8.variable_registers[0xF]);
+    }
+
+    #[test]
+    fn can_shift_vx_left_for_cosmac_vip() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip);
+        chip8.variable_registers[0x2] = 0x00;
+        chip8.variable_registers[0xC] = 0x13;
+        chip8.variable_registers[0xF] = 0x01;
+
+        chip8.shift_vx_left(0x2, 0xC);
+
+        assert_eq!(0x13 << 1, chip8.variable_registers[0x2]);
+        assert_eq!(0x0, chip8.variable_registers[0xF]);
+    }
+
+    #[test]
+    fn can_shift_vx_left_for_chip_48() {
+        let mut chip8 = Chip8::new(EmulatorType::Chip48);
+        chip8.variable_registers[0x2] = 0x13;
+        chip8.variable_registers[0xC] = 0x34;
+        chip8.variable_registers[0xF] = 0x01;
+
+        chip8.shift_vx_left(0x2, 0xC);
+
+        assert_eq!(0x13 << 1, chip8.variable_registers[0x2]);
+        assert_eq!(0x0, chip8.variable_registers[0xF]);
+    }
+
+    #[test]
     fn execute_next_instruction_can_execute_clear_screen() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.ram[0x200] = 0x00;
         chip8.ram[0x201] = 0xE0;
         chip8.program_counter = 0x200;
@@ -940,7 +1043,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_jump() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.ram[0x200] = 0x12;
         chip8.ram[0x201] = 0x34;
         chip8.program_counter = 0x200;
@@ -952,7 +1055,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_set_variable_register() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.ram[0x200] = 0x63;
         chip8.ram[0x201] = 0xBC;
         chip8.program_counter = 0x200;
@@ -965,7 +1068,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_add_to_variable_register() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.ram[0x200] = 0x73;
         chip8.ram[0x201] = 0xBC;
         chip8.program_counter = 0x200;
@@ -979,7 +1082,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_set_index_register() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.ram[0x200] = 0xA3;
         chip8.ram[0x201] = 0xBC;
         chip8.program_counter = 0x200;
@@ -996,7 +1099,7 @@ mod tests {
         let y_offset = 12;
         let sprite_bytes = [0b11111111, 0b01010101, 0b00000000, 0b11011101];
         let expected_frame_buffer = draw_test_sprite(x_offset, y_offset, &sprite_bytes);
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
 
         chip8.ram[0x200] = 0xD2;
         chip8.ram[0x201] = 0x34;
@@ -1012,7 +1115,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_call_subroutine() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.ram[0x200] = 0x22;
         chip8.ram[0x201] = 0x11;
         chip8.program_counter = 0x200;
@@ -1026,7 +1129,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_return_from_subroutine() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.ram[0x211] = 0x00;
         chip8.ram[0x212] = 0xEE;
         chip8.program_counter = 0x211;
@@ -1041,7 +1144,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_skip_instruction_if_vx_equals_nn() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.ram[0x200] = 0x33;
         chip8.ram[0x201] = 0x34;
         chip8.program_counter = 0x202;
@@ -1054,7 +1157,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_skip_instruction_if_vx_not_equals_nn() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.ram[0x200] = 0x33;
         chip8.ram[0x201] = 0x34;
         chip8.program_counter = 0x202;
@@ -1067,7 +1170,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_skip_instruction_if_vx_equals_vy() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.ram[0x200] = 0x53;
         chip8.ram[0x201] = 0x20;
         chip8.program_counter = 0x202;
@@ -1081,7 +1184,7 @@ mod tests {
 
     #[test]
     fn execute_next_instruction_can_execute_skip_instruction_if_vx_not_equals_vy() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.ram[0x200] = 0x93;
         chip8.ram[0x201] = 0x20;
         chip8.program_counter = 0x202;
@@ -1095,7 +1198,7 @@ mod tests {
 
     #[test]
     fn execute_instruction_can_execute_set_vx_to_vy() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.program_counter = 0x200;
         chip8.ram[0x200] = 0x82;
         chip8.ram[0x201] = 0xF0;
@@ -1109,7 +1212,7 @@ mod tests {
     
     #[test]
     fn execute_instruction_can_execute_binary_or_vx_with_vy() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xF] = 0xAF;
         chip8.program_counter = 0x200;
@@ -1123,7 +1226,7 @@ mod tests {
 
     #[test]
     fn execute_instruction_can_execute_binary_and_vx_with_vy() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xF] = 0xAF;
         chip8.program_counter = 0x200;
@@ -1137,7 +1240,7 @@ mod tests {
 
     #[test]
     fn execute_instruction_can_execute_binary_xor_vx_with_vy() {
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = 0x34;
         chip8.variable_registers[0xF] = 0xAF;
         chip8.program_counter = 0x200;
@@ -1153,7 +1256,7 @@ mod tests {
     fn execute_instruction_can_execute_add_vy_to_vx() {
         let x_val: u8 = 0x34;
         let y_val: u8 = 0xAF;
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
 
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
@@ -1166,38 +1269,66 @@ mod tests {
         assert_eq!(x_val + y_val, chip8.variable_registers[0x2]);
         assert_eq!(0x0, chip8.variable_registers[0xF]);
     }
-    
+
     #[test]
     fn execute_instruction_can_execute_subtract_vy_from_vx() {
         let x_val: u8 = 0xAF;
         let y_val: u8 = 0x34;
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.program_counter = 0x200;
         chip8.ram[0x200] = 0x82;
         chip8.ram[0x201] = 0xC5;
-        
+
         chip8.execute_next_instruction();
-        
+
         assert_eq!(x_val.wrapping_sub(y_val), chip8.variable_registers[0x2]);
         assert_eq!(0x1, chip8.variable_registers[0xF]);
     }
-    
+
     #[test]
     fn execute_instruction_can_execute_subtract_vx_from_vy_into_vx() {
         let x_val: u8 = 0x34;
         let y_val: u8 = 0xAF;
-        let mut chip8 = Chip8::new();
+        let mut chip8 = Chip8::default();
         chip8.variable_registers[0x2] = x_val;
         chip8.variable_registers[0xC] = y_val;
         chip8.program_counter = 0x200;
         chip8.ram[0x200] = 0x82;
-        chip8.ram[0x201] = 0xC7;   
-        
+        chip8.ram[0x201] = 0xC7;
+
         chip8.execute_next_instruction();
-        
+
         assert_eq!(y_val.wrapping_sub(x_val), chip8.variable_registers[0x2]);
         assert_eq!(0x1, chip8.variable_registers[0xF]);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_shift_vx_right() {
+        let mut chip8 = Chip8::default();
+        chip8.variable_registers[0x2] = 0x22;
+        chip8.variable_registers[0xC] = 0x34;
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0x82;
+        chip8.ram[0x201] = 0xC6;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x34 >> 1, chip8.variable_registers[0x2]);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_shift_vx_left() {
+        let mut chip8 = Chip8::default();
+        chip8.variable_registers[0x2] = 0x22;
+        chip8.variable_registers[0xC] = 0x34;
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0x82;
+        chip8.ram[0x201] = 0xCE;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x34 << 1, chip8.variable_registers[0x2]);
     }
 }

@@ -1,5 +1,5 @@
 use macroquad::prelude::*;
-use chip_8_emulator::{Chip8, DISPLAY_WIDTH, DISPLAY_HEIGHT};
+use chip_8_emulator::{Chip8, DISPLAY_WIDTH, DISPLAY_HEIGHT, EmulatorType};
 
 async fn render_frame(frame_buffer: &[u8; DISPLAY_WIDTH * DISPLAY_HEIGHT]) {
     clear_background(BLACK);
@@ -19,13 +19,13 @@ async fn render_frame(frame_buffer: &[u8; DISPLAY_WIDTH * DISPLAY_HEIGHT]) {
 
 #[macroquad::main("Chip-8 Emulator")]
 async fn main() {
-    let mut chip8 = Chip8::new();
+    // TODO take Emulator type as a command line argument
+    let mut chip8 = Chip8::new(EmulatorType::Chip48);
     let program = include_bytes!("/home/josh/Downloads/test_opcode.ch8");
     chip8.load_program(program);
 
     loop {
         chip8.execute_next_instruction();
-        let fb = chip8.frame_buffer();
-        render_frame(fb).await;
+        render_frame(chip8.frame_buffer()).await;
     }
 }
