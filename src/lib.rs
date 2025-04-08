@@ -324,6 +324,11 @@ impl<R: Rng> Chip8<R> {
         &self.frame_buffer
     }
 
+    /// Returns whether the emulator should be playing a sound
+    pub fn is_playing_sound(&self) -> bool {
+        self.sound_timer > 0
+    }
+
     /// Loads program into memory starting at address `{PROGRAM_START_ADDRESS}`
     pub fn load_program(&mut self, program: &[u8]) {
         let start_address = PROGRAM_START_ADDRESS as usize;
@@ -1609,20 +1614,20 @@ mod tests {
 
         assert_eq!(test_rng.random::<u8>() & 0x34, chip8.variable_registers[0x2]);
     }
-    
+
     #[test]
     fn execute_instruction_can_execute_skip_if_key_down() {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.program_counter = 0x200;
         chip8.ram[0x200] = 0xEC;
         chip8.ram[0x201] = 0x9E;
-        
+
         chip8.key_down(Chip8Key::C);
         chip8.execute_next_instruction();
-        
+
         assert_eq!(0x204, chip8.program_counter);
     }
-    
+
     #[test]
     fn execute_instruction_can_execute_skip_if_key_up() {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
