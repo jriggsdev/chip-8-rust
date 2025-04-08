@@ -10,6 +10,7 @@ const PROGRAM_START_ADDRESS: u16 = 0x200;
 const MEMORY_SIZE: usize = 4096;
 const STACK_SIZE: usize = 16;
 const VARIABLE_REGISTER_COUNT: usize = 16;
+const NUM_KEYS: usize = 16;
 
 /// The font sprite data consisting of hexadecimal numbers 0-F
 const FONT: [u8; 16 * 5] = [
@@ -31,14 +32,84 @@ const FONT: [u8; 16 * 5] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80  // F
 ];
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum EmulatorType {
     CosmacVip,
     Chip48
 }
 
+/// Represents a key on the Chip-8 keypad
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Chip8Key {
+    // The '0' key
+    Zero,
+    /// The '1' key
+    One,
+    /// The '2' key
+    Two,
+    /// The '3' key
+    Three,
+    /// The '4' key
+    Four,
+    /// The '5' key
+    Five,
+    /// The '6' key
+    Six,
+    /// The '7' key
+    Seven,
+    /// The '8' key
+    Eight,
+    /// The '9' key
+    Nine,
+    /// The 'A' key
+    A,
+    /// The 'B' key
+    B,
+    /// The 'C' key
+    C,
+    /// The 'D' key
+    D,
+    /// The 'E' key
+    E,
+    /// The 'F' key
+    F,
+}
+
+impl Chip8Key {
+    /// Gets the key index in the chip8 keypad for the given key
+    fn key_index(&self) -> usize {
+        match self {
+            Chip8Key::Zero => 0,
+            Chip8Key::One => 1,
+            Chip8Key::Two => 2,
+            Chip8Key::Three => 3,
+            Chip8Key::Four => 4,
+            Chip8Key::Five => 5,
+            Chip8Key::Six => 6,
+            Chip8Key::Seven => 7,
+            Chip8Key::Eight => 8,
+            Chip8Key::Nine => 9,
+            Chip8Key::A => 10,
+            Chip8Key::B => 11,
+            Chip8Key::C => 12,
+            Chip8Key::D => 13,
+            Chip8Key::E => 14,
+            Chip8Key::F => 15,
+        }
+    }
+}
+
+/// Represents the state of a Chip8 key, either up or down
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum KeyState {
+    /// Represents the key being up, i.e. not pressed
+    Up,
+    /// Represents the key being down, i.e. pressed
+    Down
+}
+
 /// Represents the set of Chip-8 instructions
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Chip8Instruction {
     /// Instruction to clear the screen (i.e. write all pixes as off)
     ClearScreen,
@@ -217,7 +288,8 @@ pub struct Chip8<R: Rng> {
     /// [`VARIABLE_REGISTER_COUNT`] 8-bit variable registers
     variable_registers: [u8; VARIABLE_REGISTER_COUNT],
     emulator_type: EmulatorType,
-    rng: R
+    rng: R,
+    keypad: [KeyState; NUM_KEYS],
 }
 
 impl<R: Rng> Chip8<R> {
@@ -234,7 +306,8 @@ impl<R: Rng> Chip8<R> {
             index_register: 0,
             variable_registers: [0; VARIABLE_REGISTER_COUNT],
             emulator_type,
-            rng
+            rng,
+            keypad: [KeyState::Up; NUM_KEYS],
         };
 
         chip8.ram[0x050..0x050 + FONT.len()].copy_from_slice(&FONT);
@@ -251,6 +324,21 @@ impl<R: Rng> Chip8<R> {
     pub fn load_program(&mut self, program: &[u8]) {
         let start_address = PROGRAM_START_ADDRESS as usize;
         self.ram[start_address..start_address + program.len()].copy_from_slice(program);
+    }
+
+    /// flags the key at key_index as down
+    pub fn key_down(&mut self, key: Chip8Key) {
+        self.keypad[key.key_index()] = KeyState::Down;
+    }
+
+    /// flags the key at key_index as up
+    pub fn key_up(&mut self, key: Chip8Key) {
+        self.keypad[key.key_index()] = KeyState::Up;
+    }
+
+    /// gets the current KeyState for a key
+    pub fn key_state(&self, key: Chip8Key) -> KeyState {
+        self.keypad[key.key_index()]
     }
 
     /// Execute the next instruction at the address pointed to by the program counter register
@@ -513,7 +601,7 @@ impl<R: Rng> Chip8<R> {
 
 #[cfg(test)]
 mod tests {
-    use rand::rngs::StdRng;
+    use rand::rngs::{StdRng, ThreadRng};
     use rand::SeedableRng;
     use super::*;
 
@@ -548,6 +636,7 @@ mod tests {
         let expected_program_counter = PROGRAM_START_ADDRESS;
         let expected_index_register = 0;
         let expected_variable_registers = [0; VARIABLE_REGISTER_COUNT];
+        let expected_keypad = [KeyState::Up; NUM_KEYS];
 
         assert_eq!(expected_ram, chip8.ram);
         assert_eq!(expected_frame_buffer, chip8.frame_buffer);
@@ -559,6 +648,7 @@ mod tests {
         assert_eq!(expected_index_register, chip8.index_register);
         assert_eq!(expected_variable_registers, chip8.variable_registers);
         assert_eq!(EmulatorType::CosmacVip, chip8.emulator_type);
+        assert_eq!(expected_keypad, chip8.keypad);
     }
 
     #[test]
@@ -629,6 +719,30 @@ mod tests {
 
         let start_address = PROGRAM_START_ADDRESS as usize;
         assert_eq!(program, chip8.ram[start_address..start_address + program.len()]);
+    }
+
+    #[test]
+    fn can_handle_key_down() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        assert_eq!(KeyState::Up, chip8.keypad[Chip8Key::C.key_index()]);
+
+        chip8.key_down(Chip8Key::C);
+
+        assert_eq!(KeyState::Down, chip8.keypad[Chip8Key::C.key_index()]);
+    }
+
+    #[test]
+    fn can_handle_key_up() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.key_down(Chip8Key::C);
+
+        assert_eq!(KeyState::Down, chip8.keypad[Chip8Key::C.key_index()]);
+
+        chip8.key_up(Chip8Key::C);
+
+        assert_eq!(KeyState::Up, chip8.keypad[Chip8Key::C.key_index()]);
     }
 
     #[test]
