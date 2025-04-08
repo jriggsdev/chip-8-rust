@@ -97,7 +97,6 @@ async fn main() {
 
         if counter % 12 == 0 {
             render_frame(chip8.frame_buffer()).await;
-            // TODO decrement timers
 
             if let Ok(ref sound) = sound {
                 if chip8.is_playing_sound() && !already_playing_sound {
@@ -110,6 +109,8 @@ async fn main() {
                     already_playing_sound = false;
                 }
             }
+
+            chip8.decrement_timers();
         }
         counter = counter.wrapping_add(1);
 

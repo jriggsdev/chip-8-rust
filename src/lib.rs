@@ -345,6 +345,17 @@ impl<R: Rng> Chip8<R> {
         self.keypad[key.key_index()] = KeyState::Up;
     }
 
+    /// Decrements the delay and sound timers by 1
+    pub fn decrement_timers(&mut self) {
+        if self.delay_timer > 0 {
+            self.delay_timer -= 1;
+        }
+
+        if self.sound_timer > 0 {
+            self.sound_timer -= 1;
+        }
+    }
+
     /// gets the current KeyState for a key
     pub fn key_state(&self, key: Chip8Key) -> KeyState {
         self.keypad[key.key_index()]
@@ -780,6 +791,30 @@ mod tests {
 
         chip8.key_up(key);
         assert_eq!(KeyState::Up, chip8.key_state(key));
+    }
+
+    #[test]
+    fn can_decrement_timers() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+        chip8.delay_timer = 100;
+        chip8.sound_timer = 100;
+
+        chip8.decrement_timers();
+
+        assert_eq!(99, chip8.delay_timer);
+        assert_eq!(99, chip8.sound_timer);
+    }
+
+    #[test]
+    fn decrement_timers_does_nothing_if_timers_are_at_zero() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+        chip8.delay_timer = 0;
+        chip8.sound_timer = 0;
+
+        chip8.decrement_timers();
+
+        assert_eq!(0, chip8.delay_timer);
+        assert_eq!(0, chip8.sound_timer);
     }
 
     #[test]
