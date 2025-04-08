@@ -171,6 +171,14 @@ enum Chip8Instruction {
     SkipIfKeyDown(u8),
     /// Instruction to skip one instruction if key at index X is up
     SkipIfKeyUp(u8),
+    /// Instruction to set Vx to the current value of the delay timer
+    SetVxToDelayTimer(u8),
+    /// Instruction to set the delay timer to the current value of Vx
+    SetDelayTimerToVx(u8),
+    /// Instruction to set the sound timer to the current value of Vx
+    SetSoundTimerToVx(u8),
+    /// Instruction to add the value in Vx to the index register
+    AddVxToIndexRegister(u8),
 }
 
 /// Represents a 16-bit opcode
@@ -253,11 +261,11 @@ impl OpCode {
             }
             0xF000..=0xFFFF => {
                 match self.nn() {
-                    // 0x07 => todo!(),
+                    0x07 => Ok(Chip8Instruction::SetVxToDelayTimer(self.x())),
                     // 0x0A => todo!(),
-                    // 0x15 => todo!(),
-                    // 0x18 => todo!(),
-                    // 0x1E => todo!(),
+                    0x15 => Ok(Chip8Instruction::SetDelayTimerToVx(self.x())),
+                    0x18 => Ok(Chip8Instruction::SetSoundTimerToVx(self.x())),
+                    0x1E => Ok(Chip8Instruction::AddVxToIndexRegister(self.x())),
                     // 0x29 => todo!(),
                     // 0x33 => todo!(),
                     // 0x55 => todo!(),
@@ -394,6 +402,10 @@ impl<R: Rng> Chip8<R> {
                 Chip8Instruction::RandomizeVx(x, nn) => self.randomize_vx(x, nn),
                 Chip8Instruction::SkipIfKeyDown(x) => self.skip_if_key_down(x),
                 Chip8Instruction::SkipIfKeyUp(x) => self.skip_if_key_up(x),
+                Chip8Instruction::SetVxToDelayTimer(x) => self.set_vx_to_delay_timer(x),
+                Chip8Instruction::SetDelayTimerToVx(x) => self.set_delay_timer_to_vx(x),
+                Chip8Instruction::SetSoundTimerToVx(x) => self.set_sound_timer_to_vx(x),
+                Chip8Instruction::AddVxToIndexRegister(x) => self.add_vx_to_index_register(x),
             };
         }
     }
@@ -632,6 +644,26 @@ impl<R: Rng> Chip8<R> {
         if self.keypad[x as usize] == KeyState::Up {
             self.program_counter += 2;
         }
+    }
+
+    /// Sets Vx to the value in the delay timer
+    fn set_vx_to_delay_timer(&mut self, x: u8) {
+       self.variable_registers[x as usize] = self.delay_timer;
+    }
+
+    /// Sets the delay timer to the current value in Vx
+    fn set_delay_timer_to_vx(&mut self, x: u8) {
+        self.delay_timer = self.variable_registers[x as usize];
+    }
+
+    /// Sets the sound timer to the current value in Vx
+    fn set_sound_timer_to_vx(&mut self, x: u8) {
+        self.sound_timer = self.variable_registers[x as usize];
+    }
+
+    /// Adds Vx to the index register(x)
+    fn add_vx_to_index_register(&mut self, x: u8) {
+        self.index_register = self.index_register.wrapping_add(self.variable_registers[x as usize] as u16);
     }
 }
 
@@ -1319,6 +1351,63 @@ mod tests {
     }
 
     #[test]
+    fn can_set_vx_to_delay_timer() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.delay_timer = 0x34;
+
+        chip8.set_vx_to_delay_timer(0x3);
+
+        assert_eq!(0x34, chip8.variable_registers[0x3]);
+    }
+
+    #[test]
+    fn can_set_delay_timer_to_vx() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.variable_registers[0x3] = 0x34;
+
+        chip8.set_delay_timer_to_vx(0x3);
+
+        assert_eq!(0x34, chip8.delay_timer);
+    }
+
+    #[test]
+    fn can_set_sound_timer_to_vx() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.variable_registers[0x3] = 0x34;
+
+        chip8.set_sound_timer_to_vx(0x3);
+
+        assert_eq!(0x34, chip8.sound_timer);
+    }
+
+    #[test]
+    fn can_add_vx_to_index_register() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.variable_registers[0x3] = 0x34;
+        chip8.index_register = 0x22;
+
+        chip8.add_vx_to_index_register(0x3);
+
+        assert_eq!(0x34 + 0x22, chip8.index_register);
+    }
+
+    #[test]
+    fn can_add_vx_to_index_register_with_overflow() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.variable_registers[0x3] = 0xFF;
+        chip8.index_register = 0x22;
+
+        chip8.add_vx_to_index_register(0x3);
+
+        assert_eq!(0xFFu16.wrapping_add(0x22), chip8.index_register);
+    }
+
+    #[test]
     fn execute_next_instruction_can_execute_clear_screen() {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x00;
@@ -1674,5 +1763,62 @@ mod tests {
         chip8.execute_next_instruction();
 
         assert_eq!(0x204, chip8.program_counter);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_set_vx_to_delay_timer() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0xF3;
+        chip8.ram[0x201] = 0x07;
+        chip8.delay_timer = 0x34;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x34, chip8.variable_registers[0x3]);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_set_delay_timer_to_vx() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0xF3;
+        chip8.ram[0x201] = 0x15;
+        chip8.variable_registers[0x3] = 0x34;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x34, chip8.delay_timer);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_set_sound_timer_to_vx() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0xF3;
+        chip8.ram[0x201] = 0x18;
+        chip8.variable_registers[0x3] = 0x34;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x34, chip8.sound_timer);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_add_vx_to_index_register() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0xF3;
+        chip8.ram[0x201] = 0x1E;
+        chip8.variable_registers[0x3] = 0x34;
+        chip8.index_register = 0x22;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x34 + 0x22, chip8.index_register);
     }
 }
