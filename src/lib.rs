@@ -167,6 +167,10 @@ enum Chip8Instruction {
     JumpWithOffset(u16),
     /// Instruction to generate a random number, binary and it with NN and put the result in VX
     RandomizeVx(u8, u8),
+    /// Instruction to skip one instruction if key at index X is down
+    SkipIfKeyDown(u8),
+    /// Instruction to skip one instruction if key at index X is up
+    SkipIfKeyUp(u8),
 }
 
 /// Represents a 16-bit opcode
@@ -242,8 +246,8 @@ impl OpCode {
             0xD000..=0xDFFF => Ok(Chip8Instruction::Draw(self.x(), self.y(), self.n())),
             0xE000..=0xEFFF => {
                 match self.nn() {
-                    // 0x9E => todo!(),
-                    // 0xA1 => todo!(),
+                    0x9E => Ok(Chip8Instruction::SkipIfKeyDown(self.x())),
+                    0xA1 => Ok(Chip8Instruction::SkipIfKeyUp(self.x())),
                     _ => Err(format!("Encountered invalid opcode {:X}", self.opcode)) // TODO test this case
                 }
             }
@@ -372,6 +376,8 @@ impl<R: Rng> Chip8<R> {
                 Chip8Instruction::ShiftVxLeft(x, y) => self.shift_vx_left(x, y),
                 Chip8Instruction::JumpWithOffset(nnn) => self.jump_with_offset(nnn),
                 Chip8Instruction::RandomizeVx(x, nn) => self.randomize_vx(x, nn),
+                Chip8Instruction::SkipIfKeyDown(x) => self.skip_if_key_down(x),
+                Chip8Instruction::SkipIfKeyUp(x) => self.skip_if_key_up(x),
             };
         }
     }
@@ -597,6 +603,20 @@ impl<R: Rng> Chip8<R> {
         let random_number = self.rng.random::<u8>();
         self.variable_registers[x as usize] = random_number & nn;
     }
+
+    /// Skips one instruction if the key at index x is down
+    fn skip_if_key_down(&mut self, x: u8) {
+        if self.keypad[x as usize] == KeyState::Down {
+            self.program_counter += 2;
+        }
+    }
+
+    /// Skips one instruction if the key at index x is up
+    fn skip_if_key_up(&mut self, x: u8) {
+        if self.keypad[x as usize] == KeyState::Up {
+            self.program_counter += 2;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -743,6 +763,18 @@ mod tests {
         chip8.key_up(Chip8Key::C);
 
         assert_eq!(KeyState::Up, chip8.keypad[Chip8Key::C.key_index()]);
+    }
+
+    #[test]
+    fn can_get_key_state() {
+        let key = Chip8Key::C;
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.key_down(key);
+        assert_eq!(KeyState::Down, chip8.key_state(key));
+
+        chip8.key_up(key);
+        assert_eq!(KeyState::Up, chip8.key_state(key));
     }
 
     #[test]
@@ -1223,6 +1255,30 @@ mod tests {
     }
 
     #[test]
+    fn can_skip_if_key_down() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.program_counter = 0x202;
+
+        chip8.key_down(Chip8Key::C);
+        chip8.skip_if_key_down(Chip8Key::C.key_index() as u8);
+
+        assert_eq!(0x204, chip8.program_counter);
+    }
+
+    #[test]
+    fn can_skip_if_key_up() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.program_counter = 0x202;
+
+        chip8.key_up(Chip8Key::C);
+        chip8.skip_if_key_up(Chip8Key::C.key_index() as u8);
+
+        assert_eq!(0x204, chip8.program_counter);
+    }
+
+    #[test]
     fn execute_next_instruction_can_execute_clear_screen() {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x00;
@@ -1552,5 +1608,31 @@ mod tests {
         chip8.execute_next_instruction();
 
         assert_eq!(test_rng.random::<u8>() & 0x34, chip8.variable_registers[0x2]);
+    }
+    
+    #[test]
+    fn execute_instruction_can_execute_skip_if_key_down() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0xEC;
+        chip8.ram[0x201] = 0x9E;
+        
+        chip8.key_down(Chip8Key::C);
+        chip8.execute_next_instruction();
+        
+        assert_eq!(0x204, chip8.program_counter);
+    }
+    
+    #[test]
+    fn execute_instruction_can_execute_skip_if_key_up() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0xEC;
+        chip8.ram[0x201] = 0xA1;
+
+        chip8.key_up(Chip8Key::C);
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x204, chip8.program_counter);
     }
 }
