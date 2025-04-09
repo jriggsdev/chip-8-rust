@@ -316,7 +316,8 @@ pub struct Chip8<R: Rng> {
     variable_registers: [u8; VARIABLE_REGISTER_COUNT],
     emulator_type: EmulatorType,
     rng: R,
-    keypad: [KeyState; NUM_KEYS],
+    keypad_state: [KeyState; NUM_KEYS],
+    previous_keypad_state: [KeyState; NUM_KEYS],
 }
 
 impl<R: Rng> Chip8<R> {
@@ -334,7 +335,8 @@ impl<R: Rng> Chip8<R> {
             variable_registers: [0; VARIABLE_REGISTER_COUNT],
             emulator_type,
             rng,
-            keypad: [KeyState::Up; NUM_KEYS],
+            keypad_state: [KeyState::Up; NUM_KEYS],
+            previous_keypad_state: [KeyState::Up; NUM_KEYS],
         };
 
         chip8.ram[FONT_START_ADDRESS..FONT_START_ADDRESS + FONT.len()].copy_from_slice(&FONT);
@@ -360,12 +362,12 @@ impl<R: Rng> Chip8<R> {
 
     /// flags the key at key_index as down
     pub fn key_down(&mut self, key: Chip8Key) {
-        self.keypad[key.key_index()] = KeyState::Down;
+        self.keypad_state[key.key_index()] = KeyState::Down;
     }
 
     /// flags the key at key_index as up
     pub fn key_up(&mut self, key: Chip8Key) {
-        self.keypad[key.key_index()] = KeyState::Up;
+        self.keypad_state[key.key_index()] = KeyState::Up;
     }
 
     /// Decrements the delay and sound timers by 1
@@ -381,7 +383,7 @@ impl<R: Rng> Chip8<R> {
 
     /// gets the current KeyState for a key
     pub fn key_state(&self, key: Chip8Key) -> KeyState {
-        self.keypad[key.key_index()]
+        self.keypad_state[key.key_index()]
     }
 
     /// Execute the next instruction at the address pointed to by the program counter register
@@ -655,7 +657,7 @@ impl<R: Rng> Chip8<R> {
     /// Skips one instruction if the key at index held in Vx is down
     fn skip_if_key_down(&mut self, x: u8) {
         let key_index = self.variable_registers[x as usize] as usize;
-        if self.keypad[key_index] == KeyState::Down {
+        if self.keypad_state[key_index] == KeyState::Down {
             self.program_counter += 2;
         }
     }
@@ -663,7 +665,7 @@ impl<R: Rng> Chip8<R> {
     /// Skips one instruction if the key at index held in Vx is up
     fn skip_if_key_up(&mut self, x: u8) {
         let key_index = self.variable_registers[x as usize] as usize;
-        if self.keypad[key_index] == KeyState::Up {
+        if self.keypad_state[key_index] == KeyState::Up {
             self.program_counter += 2;
         }
     }
@@ -690,11 +692,15 @@ impl<R: Rng> Chip8<R> {
 
     /// If a key is pressed this puts the key into Vx, otherwise it decrements the program counter by 2
     fn put_key_into_vx(&mut self, x: u8) {
-        let first_key_down_position = self.keypad.iter().position(|key| *key == KeyState::Down);
+        let key_option = self.keypad_state.iter()
+            .enumerate()
+            .position(|(i, key_state)| *key_state == KeyState::Up && self.previous_keypad_state[i] == KeyState::Down);
 
-        if let Some(key_index) = first_key_down_position {
+        if let Some(key_index) = key_option {
+            self.previous_keypad_state = self.keypad_state;
             self.variable_registers[x as usize] = key_index as u8;
         } else {
+            self.previous_keypad_state = self.keypad_state;
             self.program_counter -= 2;
         }
     }
@@ -804,7 +810,7 @@ mod tests {
         assert_eq!(expected_index_register, chip8.index_register);
         assert_eq!(expected_variable_registers, chip8.variable_registers);
         assert_eq!(EmulatorType::CosmacVip, chip8.emulator_type);
-        assert_eq!(expected_keypad, chip8.keypad);
+        assert_eq!(expected_keypad, chip8.keypad_state);
     }
 
     #[test]
@@ -881,11 +887,11 @@ mod tests {
     fn can_handle_key_down() {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
 
-        assert_eq!(KeyState::Up, chip8.keypad[Chip8Key::C.key_index()]);
+        assert_eq!(KeyState::Up, chip8.keypad_state[Chip8Key::C.key_index()]);
 
         chip8.key_down(Chip8Key::C);
 
-        assert_eq!(KeyState::Down, chip8.keypad[Chip8Key::C.key_index()]);
+        assert_eq!(KeyState::Down, chip8.keypad_state[Chip8Key::C.key_index()]);
     }
 
     #[test]
@@ -894,11 +900,11 @@ mod tests {
 
         chip8.key_down(Chip8Key::C);
 
-        assert_eq!(KeyState::Down, chip8.keypad[Chip8Key::C.key_index()]);
+        assert_eq!(KeyState::Down, chip8.keypad_state[Chip8Key::C.key_index()]);
 
         chip8.key_up(Chip8Key::C);
 
-        assert_eq!(KeyState::Up, chip8.keypad[Chip8Key::C.key_index()]);
+        assert_eq!(KeyState::Up, chip8.keypad_state[Chip8Key::C.key_index()]);
     }
 
     #[test]
@@ -1536,10 +1542,16 @@ mod tests {
     }
 
     #[test]
-    fn put_key_into_vx_puts_the_first_down_key_into_vx() {
+    fn put_key_into_vx_puts_correct_key_into_vx() {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
-        chip8.key_down(Chip8Key::C);
-        chip8.key_down(Chip8Key::Four);
+
+        chip8.previous_keypad_state[Chip8Key::Four.key_index()] = KeyState::Down;
+        chip8.previous_keypad_state[Chip8Key::C.key_index()] = KeyState::Down;
+
+        chip8.put_key_into_vx(0x3);
+
+        chip8.keypad_state[Chip8Key::C.key_index()] = KeyState::Up;
+        chip8.keypad_state[Chip8Key::Four.key_index()] = KeyState::Up;
 
         chip8.put_key_into_vx(0x3);
 
@@ -1547,7 +1559,7 @@ mod tests {
     }
 
     #[test]
-    fn put_key_into_vx_decrements_program_counter_if_no_key_is_down() {
+    fn put_key_into_vx_decrements_program_counter_if_no_key_has_been_pressed() {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.program_counter = 0x202;
 
@@ -2129,6 +2141,10 @@ mod tests {
         chip8.ram[0x200] = 0xF3;
         chip8.ram[0x201] = 0x0A;
         chip8.key_down(Chip8Key::C);
+
+        chip8.execute_next_instruction();
+
+        chip8.key_up(Chip8Key::C);
 
         chip8.execute_next_instruction();
 
