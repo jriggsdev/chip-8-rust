@@ -85,8 +85,8 @@ async fn main() {
     let mut already_playing_sound = false;
 
     // TODO take Emulator type as a command line argument
-    let mut chip8 = Chip8::new(EmulatorType::Chip48, rand_crate::rng());
-    let program = include_bytes!("/home/josh/Downloads/test_opcode.ch8");
+    let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand_crate::rng());
+    let program = include_bytes!("/home/josh/Downloads/bowling.ch8");
     chip8.load_program(program);
 
     let mut fb = [ 0; DISPLAY_WIDTH * DISPLAY_HEIGHT];

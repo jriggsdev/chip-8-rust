@@ -11,6 +11,7 @@ const MEMORY_SIZE: usize = 4096;
 const STACK_SIZE: usize = 16;
 const VARIABLE_REGISTER_COUNT: usize = 16;
 const NUM_KEYS: usize = 16;
+const FONT_START_ADDRESS: usize = 0x50;
 
 /// The font sprite data consisting of hexadecimal numbers 0-F
 const FONT: [u8; 16 * 5] = [
@@ -167,9 +168,9 @@ enum Chip8Instruction {
     JumpWithOffset(u16),
     /// Instruction to generate a random number, binary and it with NN and put the result in VX
     RandomizeVx(u8, u8),
-    /// Instruction to skip one instruction if key at index X is down
+    /// Instruction to skip one instruction if key at index held in VX is down
     SkipIfKeyDown(u8),
-    /// Instruction to skip one instruction if key at index X is up
+    /// Instruction to skip one instruction if key at index held in VX is up
     SkipIfKeyUp(u8),
     /// Instruction to set Vx to the current value of the delay timer
     SetVxToDelayTimer(u8),
@@ -179,6 +180,20 @@ enum Chip8Instruction {
     SetSoundTimerToVx(u8),
     /// Instruction to add the value in Vx to the index register
     AddVxToIndexRegister(u8),
+    /// Instruction to wait for a keypress and put the value into Vx
+    PutKeyIntoVx(u8),
+    /// Instruction to set the index register's value to the address of font character held in the
+    /// last nibble of Vx
+    PointIndexRegisterAtFontCharacter(u8),
+    /// Instruction to put the decimal digits of Vx into memory starting at the address held in the
+    /// index register
+    PutVxDecimalDigitsIntoMemory(u8),
+    /// Instruction to store the values in variable registers from V0 to Vx into memory starting
+    /// at the address held in the index register
+    StoreVariableRegistersToMemory(u8),
+    /// Instruction to load the values from memory starting at the index register into
+    /// variable registers from V0 to Vx
+    LoadVariableRegistersFromMemory(u8),
 }
 
 /// Represents a 16-bit opcode
@@ -262,14 +277,14 @@ impl OpCode {
             0xF000..=0xFFFF => {
                 match self.nn() {
                     0x07 => Ok(Chip8Instruction::SetVxToDelayTimer(self.x())),
-                    // 0x0A => todo!(),
+                    0x0A => Ok(Chip8Instruction::PutKeyIntoVx(self.x())),
                     0x15 => Ok(Chip8Instruction::SetDelayTimerToVx(self.x())),
                     0x18 => Ok(Chip8Instruction::SetSoundTimerToVx(self.x())),
                     0x1E => Ok(Chip8Instruction::AddVxToIndexRegister(self.x())),
-                    // 0x29 => todo!(),
-                    // 0x33 => todo!(),
-                    // 0x55 => todo!(),
-                    // 0x65 => todo!(),
+                    0x29 => Ok(Chip8Instruction::PointIndexRegisterAtFontCharacter(self.x())),
+                    0x33 => Ok(Chip8Instruction::PutVxDecimalDigitsIntoMemory(self.x())),
+                    0x55 => Ok(Chip8Instruction::StoreVariableRegistersToMemory(self.x())),
+                    0x65 => Ok(Chip8Instruction::LoadVariableRegistersFromMemory(self.x())),
                     _ => Err(format!("Encountered invalid opcode {:X}", self.opcode)) // TODO test this case
                 }
             }
@@ -322,7 +337,7 @@ impl<R: Rng> Chip8<R> {
             keypad: [KeyState::Up; NUM_KEYS],
         };
 
-        chip8.ram[0x050..0x050 + FONT.len()].copy_from_slice(&FONT);
+        chip8.ram[FONT_START_ADDRESS..FONT_START_ADDRESS + FONT.len()].copy_from_slice(&FONT);
 
         chip8
     }
@@ -406,6 +421,11 @@ impl<R: Rng> Chip8<R> {
                 Chip8Instruction::SetDelayTimerToVx(x) => self.set_delay_timer_to_vx(x),
                 Chip8Instruction::SetSoundTimerToVx(x) => self.set_sound_timer_to_vx(x),
                 Chip8Instruction::AddVxToIndexRegister(x) => self.add_vx_to_index_register(x),
+                Chip8Instruction::PutKeyIntoVx(x) => self.put_key_into_vx(x),
+                Chip8Instruction::PointIndexRegisterAtFontCharacter(x) => self.point_index_register_at_font_character(x),
+                Chip8Instruction::PutVxDecimalDigitsIntoMemory(x) => self.put_vx_decimal_digits_into_memory(x),
+                Chip8Instruction::StoreVariableRegistersToMemory(x) => self.store_variable_registers_to_memory(x),
+                Chip8Instruction::LoadVariableRegistersFromMemory(x) => self.load_variable_registers_from_memory(x),
             };
         }
     }
@@ -469,12 +489,12 @@ impl<R: Rng> Chip8<R> {
                     let frame_buffer_pixel_index = pixel_y_index * DISPLAY_WIDTH + pixel_x_index;
                     let frame_buffer_pixel_value = self.frame_buffer[frame_buffer_pixel_index];
 
-                    // If a pixes was on but is now off flip the VF register
-                    if frame_buffer_pixel_value == 1 && sprite_pixel_value == 0 {
+                    // If a pixel was on but is now off flip the VF register
+                    if frame_buffer_pixel_value == 1 && sprite_pixel_value == 1 {
                         self.variable_registers[0xF] = 1;
                     }
 
-                    self.frame_buffer[frame_buffer_pixel_index] = sprite_pixel_value;
+                    self.frame_buffer[frame_buffer_pixel_index] = frame_buffer_pixel_value ^ sprite_pixel_value;
                 }
             }
         }
@@ -632,16 +652,18 @@ impl<R: Rng> Chip8<R> {
         self.variable_registers[x as usize] = random_number & nn;
     }
 
-    /// Skips one instruction if the key at index x is down
+    /// Skips one instruction if the key at index held in Vx is down
     fn skip_if_key_down(&mut self, x: u8) {
-        if self.keypad[x as usize] == KeyState::Down {
+        let key_index = self.variable_registers[x as usize] as usize;
+        if self.keypad[key_index] == KeyState::Down {
             self.program_counter += 2;
         }
     }
 
-    /// Skips one instruction if the key at index x is up
+    /// Skips one instruction if the key at index held in Vx is up
     fn skip_if_key_up(&mut self, x: u8) {
-        if self.keypad[x as usize] == KeyState::Up {
+        let key_index = self.variable_registers[x as usize] as usize;
+        if self.keypad[key_index] == KeyState::Up {
             self.program_counter += 2;
         }
     }
@@ -665,16 +687,83 @@ impl<R: Rng> Chip8<R> {
     fn add_vx_to_index_register(&mut self, x: u8) {
         self.index_register = self.index_register.wrapping_add(self.variable_registers[x as usize] as u16);
     }
+
+    /// If a key is pressed this puts the key into Vx, otherwise it decrements the program counter by 2
+    fn put_key_into_vx(&mut self, x: u8) {
+        let first_key_down_position = self.keypad.iter().position(|key| *key == KeyState::Down);
+
+        if let Some(key_index) = first_key_down_position {
+            self.variable_registers[x as usize] = key_index as u8;
+        } else {
+            self.program_counter -= 2;
+        }
+    }
+
+    /// Sets the value of the index register to the address of font character held in the last nibble
+    /// of Vx
+    fn point_index_register_at_font_character(&mut self, x: u8) {
+        let vx = self.variable_registers[x as usize];
+        let character_index = vx & 0x0F;
+        let character_address = FONT_START_ADDRESS as u16 + (character_index as u16 * 5);
+
+        self.index_register = character_address;
+    }
+
+    /// Instruction to put the decimal digits of the value stored in Vx into memory starting at
+    /// the address held in the index register
+    fn put_vx_decimal_digits_into_memory(&mut self, x: u8) {
+        let vx = self.variable_registers[x as usize];
+        let digits: Vec<u8> = (0..3).rev().map(|i| (vx / (10u8.pow(i))) % 10u8).collect();
+        let start_address = self.index_register as usize;
+
+        for (offset, digit) in digits.iter().enumerate() {
+            self.ram[start_address + offset] = *digit;
+        }
+    }
+
+    /// Ambiguous instruction. This instruction stores the values in the variable registers V0 to Vx
+    /// inclusively to memory beginning at the address held in the index register.
+    /// For the COSMAC-VIP the index register will be incremented after each register is stored.
+    /// For the CHIP-48 the index register will not be updated
+    fn store_variable_registers_to_memory(&mut self, x: u8) {
+        let start_address = self.index_register as usize;
+
+        for i in 0..=x as usize {
+            self.ram[start_address + i] = self.variable_registers[i];
+
+            if self.emulator_type == EmulatorType::CosmacVip {
+                self.index_register += 1;
+            }
+        }
+    }
+
+    /// Ambiguous instruction. This instruction loads values from memory starting at the address
+    ///held in the index register into the variable registers V0 to Vx inclusively.
+    /// For the COSMAC-VIP the index register will be incremented after each register is loaded.
+    /// For the CHIP-48 the index register will not be updated
+    fn load_variable_registers_from_memory(&mut self, x: u8) {
+        let start_address = self.index_register as usize;
+
+        for i in 0..=x as usize {
+            self.variable_registers[i] = self.ram[start_address + i];
+
+            if self.emulator_type == EmulatorType::CosmacVip {
+                self.index_register += 1;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use rand::rngs::{StdRng, ThreadRng};
+    use rand::rngs::{StdRng};
     use rand::SeedableRng;
     use super::*;
 
-    fn draw_test_sprite(x_offset: u8, y_offset: u8, sprite_bytes: &[u8]) -> [u8; DISPLAY_WIDTH * DISPLAY_HEIGHT] {
-        let mut test_frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
+    fn draw_test_sprite(test_frame_buffer: &mut [u8; DISPLAY_WIDTH * DISPLAY_HEIGHT],
+                        x_offset: u8,
+                        y_offset: u8,
+                        sprite_bytes: &[u8]) {
         for (row, byte) in sprite_bytes.iter().enumerate() {
             for bit in 0..8 {
                 let sprite_bit_value = (byte >> (7 - bit)) & 0x01;
@@ -682,11 +771,10 @@ mod tests {
                 let y_index = y_offset as usize + row;
 
                 if x_index < DISPLAY_WIDTH && y_index < DISPLAY_HEIGHT {
-                    test_frame_buffer[y_index * DISPLAY_WIDTH + x_index] = sprite_bit_value;
+                    test_frame_buffer[y_index * DISPLAY_WIDTH + x_index] ^= sprite_bit_value;
                 }
             }
         }
-        test_frame_buffer
     }
 
     #[test]
@@ -928,12 +1016,14 @@ mod tests {
     }
 
     #[test]
-    fn can_draw() {
+    fn can_draw_sprite() {
         let x_offset = 34;
         let y_offset = 12;
         let sprite_bytes = [0b11111111, 0b01010101, 0b00000000, 0b11011101];
-        let expected_frame_buffer = draw_test_sprite(x_offset, y_offset, &sprite_bytes);
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+        let mut test_frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
+
+        draw_test_sprite(&mut test_frame_buffer, x_offset, y_offset, &sprite_bytes);
 
         chip8.frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
         chip8.ram[0x300..0x304].copy_from_slice(&sprite_bytes);
@@ -943,7 +1033,41 @@ mod tests {
 
         chip8.draw(0x2, 0x3, 0x4);
 
-        assert_eq!(expected_frame_buffer, chip8.frame_buffer);
+        assert_eq!(test_frame_buffer, chip8.frame_buffer);
+    }
+
+    #[test]
+    fn draw_flips_pixel_state_correctly() {
+        let x_offset = 34;
+        let y_offset = 12;
+        let sprite_bytes = [0b11111111, 0b01010101];
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+        let mut test_frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
+
+        test_frame_buffer[12 * DISPLAY_WIDTH + 34..12 * DISPLAY_WIDTH + 34 + 8]
+            .copy_from_slice(&[1, 1, 1, 1, 0, 0, 0, 0]);
+
+        test_frame_buffer[13 * DISPLAY_WIDTH + 34..13 * DISPLAY_WIDTH + 34 + 8]
+            .copy_from_slice(&[1, 1, 1, 1, 0, 0, 0, 0]);
+        
+        draw_test_sprite(&mut test_frame_buffer, x_offset, y_offset, &sprite_bytes);
+
+        chip8.frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
+
+        chip8.frame_buffer[12 * DISPLAY_WIDTH + 34..12 * DISPLAY_WIDTH + 34 + 8]
+            .copy_from_slice(&[1, 1, 1, 1, 0, 0, 0, 0]);
+
+        chip8.frame_buffer[13 * DISPLAY_WIDTH + 34..13 * DISPLAY_WIDTH + 34 + 8]
+            .copy_from_slice(&[1, 1, 1, 1, 0, 0, 0, 0]);
+
+        chip8.ram[0x300..0x302].copy_from_slice(&sprite_bytes);
+        chip8.set_index_register(0x300);
+        chip8.set_variable_register(0x2, x_offset);
+        chip8.set_variable_register(0x3, y_offset);
+
+        chip8.draw(0x2, 0x3, 0x2);
+
+        assert_eq!(test_frame_buffer, chip8.frame_buffer);
     }
 
     #[test]
@@ -951,8 +1075,10 @@ mod tests {
         let x_offset = 60;
         let y_offset = 30;
         let sprite_bytes = [0b11111111, 0b01010101, 0b00000000, 0b11011101];
-        let expected_frame_buffer = draw_test_sprite(x_offset, y_offset, &sprite_bytes);
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+        let mut test_frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
+
+        draw_test_sprite(&mut test_frame_buffer, x_offset, y_offset, &sprite_bytes);
 
         chip8.frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
         chip8.ram[0x300..0x304].copy_from_slice(&sprite_bytes);
@@ -962,7 +1088,7 @@ mod tests {
 
         chip8.draw(0x2, 0x3, 0x4);
 
-        assert_eq!(expected_frame_buffer, chip8.frame_buffer);
+        assert_eq!(test_frame_buffer, chip8.frame_buffer);
     }
 
     #[test]
@@ -1331,9 +1457,10 @@ mod tests {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
 
         chip8.program_counter = 0x202;
+        chip8.variable_registers[0x4] = Chip8Key::C.key_index() as u8;
 
         chip8.key_down(Chip8Key::C);
-        chip8.skip_if_key_down(Chip8Key::C.key_index() as u8);
+        chip8.skip_if_key_down(0x4);
 
         assert_eq!(0x204, chip8.program_counter);
     }
@@ -1343,9 +1470,10 @@ mod tests {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
 
         chip8.program_counter = 0x202;
+        chip8.variable_registers[0x4] = Chip8Key::C.key_index() as u8;
 
         chip8.key_up(Chip8Key::C);
-        chip8.skip_if_key_up(Chip8Key::C.key_index() as u8);
+        chip8.skip_if_key_up(0x4);
 
         assert_eq!(0x204, chip8.program_counter);
     }
@@ -1405,6 +1533,173 @@ mod tests {
         chip8.add_vx_to_index_register(0x3);
 
         assert_eq!(0xFFu16.wrapping_add(0x22), chip8.index_register);
+    }
+
+    #[test]
+    fn put_key_into_vx_puts_the_first_down_key_into_vx() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+        chip8.key_down(Chip8Key::C);
+        chip8.key_down(Chip8Key::Four);
+
+        chip8.put_key_into_vx(0x3);
+
+        assert_eq!(Chip8Key::Four.key_index() as u8, chip8.variable_registers[0x3]);
+    }
+
+    #[test]
+    fn put_key_into_vx_decrements_program_counter_if_no_key_is_down() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+        chip8.program_counter = 0x202;
+
+        chip8.put_key_into_vx(0x3);
+
+        assert_eq!(0x200, chip8.program_counter);
+    }
+
+    #[test]
+    fn can_point_index_register_at_font_character() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.variable_registers[0x3] = 0x0C;
+
+        chip8.point_index_register_at_font_character(0x3);
+
+        assert_eq!(FONT_START_ADDRESS as u16 + (0xC * 5), chip8.index_register);
+    }
+
+    #[test]
+    fn can_put_vx_decimal_digits_into_memory_for_zero() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.variable_registers[0x3] = 0;
+        chip8.index_register = 0x234;
+        chip8.ram[0x234] = 1;
+        chip8.ram[0x235] = 2;
+        chip8.ram[0x236] = 3;
+
+        chip8.put_vx_decimal_digits_into_memory(0x3);
+
+        assert_eq!(0, chip8.ram[0x234]);
+        assert_eq!(0, chip8.ram[0x235]);
+        assert_eq!(0, chip8.ram[0x236]);
+    }
+
+    #[test]
+    fn can_put_vx_decimal_digits_into_memory_for_one_digit_number() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.variable_registers[0x3] = 3;
+        chip8.index_register = 0x234;
+
+        chip8.put_vx_decimal_digits_into_memory(0x3);
+
+        assert_eq!(0, chip8.ram[0x234]);
+        assert_eq!(0, chip8.ram[0x235]);
+        assert_eq!(3, chip8.ram[0x236]);
+    }
+
+    #[test]
+    fn can_put_vx_decimal_digits_into_memory_for_two_digit_number() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.variable_registers[0x3] = 43;
+        chip8.index_register = 0x234;
+
+        chip8.put_vx_decimal_digits_into_memory(0x3);
+
+        assert_eq!(0, chip8.ram[0x234]);
+        assert_eq!(4, chip8.ram[0x235]);
+        assert_eq!(3, chip8.ram[0x236]);
+    }
+
+    #[test]
+    fn can_put_vx_decimal_digits_into_memory_for_three_digit_number() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.variable_registers[0x3] = 243;
+        chip8.index_register = 0x234;
+
+        chip8.put_vx_decimal_digits_into_memory(0x3);
+
+        assert_eq!(2, chip8.ram[0x234]);
+        assert_eq!(4, chip8.ram[0x235]);
+        assert_eq!(3, chip8.ram[0x236]);
+    }
+
+    #[test]
+    fn can_store_variable_registers_to_memory_for_cosmac_vip() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.variable_registers[0x0] = 0x12;
+        chip8.variable_registers[0x1] = 0x23;
+        chip8.variable_registers[0x2] = 0x45;
+        chip8.variable_registers[0x3] = 0x67;
+        chip8.index_register = 0xC00;
+
+        chip8.store_variable_registers_to_memory(0x3);
+
+        assert_eq!(0x12, chip8.ram[0xC00]);
+        assert_eq!(0x23, chip8.ram[0xC01]);
+        assert_eq!(0x45, chip8.ram[0xC02]);
+        assert_eq!(0x67, chip8.ram[0xC03]);
+        assert_eq!(0xC04, chip8.index_register);
+    }
+
+    #[test]
+    fn can_store_variable_registers_to_memory_for_chip_48() {
+        let mut chip8 = Chip8::new(EmulatorType::Chip48, rand::rng());
+
+        chip8.variable_registers[0x0] = 0x12;
+        chip8.variable_registers[0x1] = 0x23;
+        chip8.variable_registers[0x2] = 0x45;
+        chip8.variable_registers[0x3] = 0x67;
+        chip8.index_register = 0xC00;
+
+        chip8.store_variable_registers_to_memory(0x3);
+
+        assert_eq!(0x12, chip8.ram[0xC00]);
+        assert_eq!(0x23, chip8.ram[0xC01]);
+        assert_eq!(0x45, chip8.ram[0xC02]);
+        assert_eq!(0x67, chip8.ram[0xC03]);
+        assert_eq!(0xC00, chip8.index_register);
+    }
+
+    #[test]
+    fn can_load_variable_registers_from_memory_for_cosmac_vip() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.ram[0xC00] = 0x12;
+        chip8.ram[0xC01] = 0x23;
+        chip8.ram[0xC02] = 0x45;
+        chip8.ram[0xC03] = 0x67;
+        chip8.index_register = 0xC00;
+
+        chip8.load_variable_registers_from_memory(0x3);
+
+        assert_eq!(0x12, chip8.variable_registers[0x0]);
+        assert_eq!(0x23, chip8.variable_registers[0x1]);
+        assert_eq!(0x45, chip8.variable_registers[0x2]);
+        assert_eq!(0x67, chip8.variable_registers[0x3]);
+        assert_eq!(0xC04, chip8.index_register);
+    }
+
+    #[test]
+    fn can_load_variable_registers_from_memory_for_chip_48() {
+        let mut chip8 = Chip8::new(EmulatorType::Chip48, rand::rng());
+
+        chip8.ram[0xC00] = 0x12;
+        chip8.ram[0xC01] = 0x23;
+        chip8.ram[0xC02] = 0x45;
+        chip8.ram[0xC03] = 0x67;
+        chip8.index_register = 0xC00;
+
+        chip8.load_variable_registers_from_memory(0x3);
+
+        assert_eq!(0x12, chip8.variable_registers[0x0]);
+        assert_eq!(0x23, chip8.variable_registers[0x1]);
+        assert_eq!(0x45, chip8.variable_registers[0x2]);
+        assert_eq!(0x67, chip8.variable_registers[0x3]);
+        assert_eq!(0xC00, chip8.index_register);
     }
 
     #[test]
@@ -1478,8 +1773,10 @@ mod tests {
         let x_offset = 34;
         let y_offset = 12;
         let sprite_bytes = [0b11111111, 0b01010101, 0b00000000, 0b11011101];
-        let expected_frame_buffer = draw_test_sprite(x_offset, y_offset, &sprite_bytes);
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+        let mut test_frame_buffer = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
+
+        draw_test_sprite(&mut test_frame_buffer, x_offset, y_offset, &sprite_bytes);
 
         chip8.ram[0x200] = 0xD2;
         chip8.ram[0x201] = 0x34;
@@ -1490,7 +1787,7 @@ mod tests {
 
         chip8.execute_next_instruction();
 
-        assert_eq!(expected_frame_buffer, chip8.frame_buffer);
+        assert_eq!(test_frame_buffer, chip8.frame_buffer);
     }
 
     #[test]
@@ -1743,7 +2040,8 @@ mod tests {
     fn execute_instruction_can_execute_skip_if_key_down() {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.program_counter = 0x200;
-        chip8.ram[0x200] = 0xEC;
+        chip8.variable_registers[0x4] = Chip8Key::C.key_index() as u8;
+        chip8.ram[0x200] = 0xE4;
         chip8.ram[0x201] = 0x9E;
 
         chip8.key_down(Chip8Key::C);
@@ -1756,7 +2054,8 @@ mod tests {
     fn execute_instruction_can_execute_skip_if_key_up() {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.program_counter = 0x200;
-        chip8.ram[0x200] = 0xEC;
+        chip8.variable_registers[0x4] = Chip8Key::C.key_index() as u8;
+        chip8.ram[0x200] = 0xE4;
         chip8.ram[0x201] = 0xA1;
 
         chip8.key_up(Chip8Key::C);
@@ -1820,5 +2119,94 @@ mod tests {
         chip8.execute_next_instruction();
 
         assert_eq!(0x34 + 0x22, chip8.index_register);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_put_key_int_vx() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0xF3;
+        chip8.ram[0x201] = 0x0A;
+        chip8.key_down(Chip8Key::C);
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(Chip8Key::C.key_index() as u8, chip8.variable_registers[0x3]);
+    }
+
+    #[test]
+    fn execute_instruction_can_point_index_register_at_font_character() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0xF3;
+        chip8.ram[0x201] = 0x29;
+        chip8.variable_registers[0x3] = 0x5;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(FONT_START_ADDRESS as u16 + (0x5 * 5), chip8.index_register);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_put_vx_decimal_digits_into_memory() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0xF3;
+        chip8.ram[0x201] = 0x33;
+        chip8.variable_registers[0x3] = 0x9C;
+        chip8.index_register = 0x344;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(1, chip8.ram[0x344]);
+        assert_eq!(5, chip8.ram[0x345]);
+        assert_eq!(6, chip8.ram[0x346]);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_store_variable_registers_to_memory() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0xF3;
+        chip8.ram[0x201] = 0x55;
+        chip8.variable_registers[0x0] = 0x12;
+        chip8.variable_registers[0x1] = 0x23;
+        chip8.variable_registers[0x2] = 0x45;
+        chip8.variable_registers[0x3] = 0x67;
+        chip8.index_register = 0xC00;
+
+        chip8.execute_next_instruction();
+
+        assert_eq!(0x12, chip8.ram[0xC00]);
+        assert_eq!(0x23, chip8.ram[0xC01]);
+        assert_eq!(0x45, chip8.ram[0xC02]);
+        assert_eq!(0x67, chip8.ram[0xC03]);
+        assert_eq!(0xC04, chip8.index_register);
+    }
+
+    #[test]
+    fn execute_instruction_can_execute_load_variable_registers_from_memory() {
+        let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
+
+        chip8.program_counter = 0x200;
+        chip8.ram[0x200] = 0xF3;
+        chip8.ram[0x201] = 0x65;
+        chip8.ram[0xC00] = 0x12;
+        chip8.ram[0xC01] = 0x23;
+        chip8.ram[0xC02] = 0x45;
+        chip8.ram[0xC03] = 0x67;
+        chip8.index_register = 0xC00;
+
+        chip8.load_variable_registers_from_memory(0x3);
+
+        assert_eq!(0x12, chip8.variable_registers[0x0]);
+        assert_eq!(0x23, chip8.variable_registers[0x1]);
+        assert_eq!(0x45, chip8.variable_registers[0x2]);
+        assert_eq!(0x67, chip8.variable_registers[0x3]);
+        assert_eq!(0xC04, chip8.index_register);
     }
 }
