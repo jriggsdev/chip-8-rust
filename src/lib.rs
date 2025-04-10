@@ -1,16 +1,27 @@
 use rand::{Rng};
 
-/// The emulators display width in pixels
+/// The frame buffer's width in pixels
 pub const DISPLAY_WIDTH: usize = 64;
 
-/// The emulators display height in pixels
+/// The frame buffer's height in pixels
 pub const DISPLAY_HEIGHT: usize = 32;
 
+/// The address at which to start loading program bytes
 const PROGRAM_START_ADDRESS: u16 = 0x200;
+
+/// The number bytes of memory
 const MEMORY_SIZE: usize = 4096;
+
+/// The number of bytes the stack can hold
 const STACK_SIZE: usize = 16;
+
+/// The number of variable registers
 const VARIABLE_REGISTER_COUNT: usize = 16;
+
+/// The number of keys on the keypad
 const NUM_KEYS: usize = 16;
+
+/// The address at which to start loading the font
 const FONT_START_ADDRESS: usize = 0x50;
 
 /// The font sprite data consisting of hexadecimal numbers 0-F
@@ -33,13 +44,18 @@ const FONT: [u8; 16 * 5] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80  // F
 ];
 
+/// Specifies an emulator type to run the program as.
+/// Emulator type affects how certain instructions are interpreted depending on the program it
+/// may work on one type and not the other.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum EmulatorType {
+    /// Tells the Chip-8 interpreter to interpret instructions as the COSMAC-VIP would
     CosmacVip,
+    /// Tells the Chip-8 interpreter to interpret instructions as the CHIP-48 would
     Chip48
 }
 
-/// Represents a key on the Chip-8 keypad
+/// Represents a key on the Chip-8 keypad.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Chip8Key {
     // The '0' key
@@ -171,9 +187,13 @@ pub struct Chip8<R: Rng> {
     index_register: u16,
     /// [`VARIABLE_REGISTER_COUNT`] 8-bit variable registers
     variable_registers: [u8; VARIABLE_REGISTER_COUNT],
+    /// The emulator type to interpret instructions as
     emulator_type: EmulatorType,
+    /// A random number generator used to generate random numbers for certain instructions
     rng: R,
+    /// The current state of the keypad
     keypad_state: [KeyState; NUM_KEYS],
+    /// The state of the keypad on the previous loop through of the "put key into VX" instruction
     previous_keypad_state: [KeyState; NUM_KEYS],
 }
 
@@ -272,7 +292,7 @@ impl<R: Rng> Chip8<R> {
                     0x6 => self.shift_vx_right(opcode.x(), opcode.y()),
                     0x7 => self.subtract_vx_from_vy_into_vx(opcode.x(), opcode.y()),
                     0xE => self.shift_vx_left(opcode.x(), opcode.y()),
-                    _ => panic!("Encountered invalid opcode {:X}", opcode.opcode) // TODO test this case
+                    _ => self.panic_for_invalid_opcode(opcode) // TODO test this case
                 }
             },
             0x9000..=0x9FFF => self.skip_instruction_if_vx_not_equals_vy(opcode.x(), opcode.y()),
@@ -284,7 +304,7 @@ impl<R: Rng> Chip8<R> {
                 match opcode.nn() {
                     0x9E => self.skip_if_key_down(opcode.x()),
                     0xA1 => self.skip_if_key_up(opcode.x()),
-                    _ => panic!("Encountered invalid opcode {:X}", opcode.opcode) // TODO test this case
+                    _ => self.panic_for_invalid_opcode(opcode) // TODO test this case
                 }
             }
             0xF000..=0xFFFF => {
@@ -298,11 +318,16 @@ impl<R: Rng> Chip8<R> {
                     0x33 => self.put_vx_decimal_digits_into_memory(opcode.x()),
                     0x55 => self.store_variable_registers_to_memory(opcode.x()),
                     0x65 => self.load_variable_registers_from_memory(opcode.x()),
-                    _ => panic!("Encountered invalid opcode {:X}", opcode.opcode) // TODO test this case
+                    _ => self.panic_for_invalid_opcode(opcode) // TODO test this case
                 }
             }
-            _ => panic!("Encountered invalid opcode {:X}", opcode.opcode)
+            _ => self.panic_for_invalid_opcode(opcode)
         }
+    }
+
+    /// Panics with a message indicating an invalid opcode was encountered.
+    fn panic_for_invalid_opcode(&self, opcode: OpCode) {
+        panic!("Encountered invalid opcode {:X}", opcode.opcode)
     }
 
     /// Fetches and returns the next opcode starting at the address pointed to by the program
@@ -341,7 +366,7 @@ impl<R: Rng> Chip8<R> {
         self.index_register = nnn;
     }
 
-    /// draws an n pixel tall sprite from the memory location that the index register is holding to
+    /// Draws an n pixel tall sprite from the memory location that the index register is holding to
     /// the frame buffer, at horizontal X coordinate held in variable register at index x and the Y
     /// coordinate held in the variable register at index y
     fn draw(&mut self, x: u8, y: u8, n: u8) {
@@ -350,12 +375,12 @@ impl<R: Rng> Chip8<R> {
         let x_offset = self.variable_registers[x as usize] as usize % DISPLAY_WIDTH;
         let y_offset = self.variable_registers[y as usize] as usize % DISPLAY_HEIGHT;
 
-        // reset the VF register. We will flip it if any pixes go from ON to OFF
+        // Reset the VF register. We will flip it if any pixes go from ON to OFF
         self.variable_registers[0xF] = 0;
 
         // iterate over the sprite bytes
         for (row, byte) in sprite_bytes.iter().enumerate() {
-            // iterate over the bites in the current sprite byte
+            // iterate over the bits in the current sprite byte
             for bit_index in 0..8 {
                 let pixel_x_index = x_offset + bit_index;
                 let pixel_y_index = y_offset + row;
@@ -619,7 +644,7 @@ impl<R: Rng> Chip8<R> {
     }
 
     /// Ambiguous instruction. This instruction loads values from memory starting at the address
-    ///held in the index register into the variable registers V0 to Vx inclusively.
+    /// held in the index register into the variable registers V0 to Vx inclusively.
     /// For the COSMAC-VIP the index register will be incremented after each register is loaded.
     /// For the CHIP-48 the index register will not be updated
     fn load_variable_registers_from_memory(&mut self, x: u8) {
