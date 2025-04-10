@@ -109,93 +109,6 @@ pub enum KeyState {
     Down
 }
 
-/// Represents the set of Chip-8 instructions
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum Chip8Instruction {
-    /// Instruction to clear the screen (i.e. write all pixes as off)
-    ClearScreen,
-    /// Instruction to set program counter to the provided address
-    Jump(u16),
-    /// Instruction to set the variable register x to nn
-    SetVariableRegister(u8, u8),
-    /// Instruction to add the value of nn to variable register x
-    AddToVariableRegister(u8, u8),
-    /// Instruction to set the index register to nnn
-    SetIndexRegister(u16),
-    /// Instruction to draw an n pixel tall sprite from the memory location in the index register
-    /// with horizontal coordinate in variable register x and vertical screen coordinate in
-    /// variable register y
-    Draw(u8, u8, u8),
-    /// Instruction to push the current address to the stack and jump to a subroutine at a new address
-    CallSubroutine(u16),
-    /// Instruction to pop an address from the stack and return the program counter to that address
-    ReturnFromSubroutine,
-    /// Instruction to skip the next instruction if VX == NN
-    SkipInstructionIfVxEqualsNn(u8, u8),
-    /// Instruction to skip the next instruction if VX != NN
-    SkipInstructionIfVxNotEqualsNn(u8, u8),
-    /// Instruction to skip the next instruction if VX == VY
-    SkipInstructionIfVxEqualsVy(u8, u8),
-    /// Instruction to skip the next instruction if VX != VY
-    SkipInstructionIfVxNotEqualsVy(u8, u8),
-    /// Instruction to set Vx to the value of Vy
-    SetVxToVy(u8, u8),
-    /// Instruction to set Vx to the binary or of Vx and Vy
-    BinaryOrVxWithVy(u8, u8),
-    /// Instruction to set Vx to the binary and of Vx and Vy
-    BinaryAndVxWithVy(u8, u8),
-    /// Instruction to set Vx to the binary xor of Vx and Vy
-    BinaryXorVxWithVy(u8, u8),
-    /// Instruction to add Vy to Vx
-    AddVyToVx(u8, u8),
-    /// Instruction to subtract Vy from Vx
-    SubtractVyFromVx(u8, u8),
-    /// Instruction to subtract Vx from Vy and put the result into Vx
-    SubtractVxFromVyIntoVx(u8, u8),
-    /// Ambiguous instruction depending on emulator type.
-    /// For COSMAC-VIP this sets Vx to Vy then shifts Vx one bit to the right.
-    /// For CHIP-48 this just shifts Vx one bit to the right ignoring Vy.
-    /// In both cases VF is set to the bit that is shifted out.
-    ShiftVxRight(u8, u8),
-    /// Ambiguous instruction depending on emulator type.
-    /// For COSMAC-VIP this sets Vx to Vy then shifts Vx one bit to the left.
-    /// For CHIP-48 this just shifts Vx one bit to the left ignoring Vy.
-    /// In both cases VF is set to the bit that is shifted out.
-    ShiftVxLeft(u8, u8),
-    /// Ambiguous instruction depending on emulator type.
-    /// For COSMAC-VIP this jumps to the address NNN plus the value in V0
-    /// For CHIP-48 it will jump to the address XNN plus the value in VX
-    JumpWithOffset(u16),
-    /// Instruction to generate a random number, binary and it with NN and put the result in VX
-    RandomizeVx(u8, u8),
-    /// Instruction to skip one instruction if key at index held in VX is down
-    SkipIfKeyDown(u8),
-    /// Instruction to skip one instruction if key at index held in VX is up
-    SkipIfKeyUp(u8),
-    /// Instruction to set Vx to the current value of the delay timer
-    SetVxToDelayTimer(u8),
-    /// Instruction to set the delay timer to the current value of Vx
-    SetDelayTimerToVx(u8),
-    /// Instruction to set the sound timer to the current value of Vx
-    SetSoundTimerToVx(u8),
-    /// Instruction to add the value in Vx to the index register
-    AddVxToIndexRegister(u8),
-    /// Instruction to wait for a keypress and put the value into Vx
-    PutKeyIntoVx(u8),
-    /// Instruction to set the index register's value to the address of font character held in the
-    /// last nibble of Vx
-    PointIndexRegisterAtFontCharacter(u8),
-    /// Instruction to put the decimal digits of Vx into memory starting at the address held in the
-    /// index register
-    PutVxDecimalDigitsIntoMemory(u8),
-    /// Instruction to store the values in variable registers from V0 to Vx into memory starting
-    /// at the address held in the index register
-    StoreVariableRegistersToMemory(u8),
-    /// Instruction to load the values from memory starting at the index register into
-    /// variable registers from V0 to Vx
-    LoadVariableRegistersFromMemory(u8),
-}
-
 /// Represents a 16-bit opcode
 #[derive(Debug)]
 struct OpCode {
@@ -234,62 +147,6 @@ impl OpCode {
     /// second, third and fourth nibbles of the opcode as u16
     fn nnn(&self) -> u16 {
         self.opcode & 0x0FFF
-    }
-
-    /// Decodes the opcode as a CHIP-8 instruction
-    fn as_instruction(&self) -> Result<Chip8Instruction, String> {
-        match self.opcode {
-            0x00E0 => Ok(Chip8Instruction::ClearScreen),
-            0x00EE => Ok(Chip8Instruction::ReturnFromSubroutine),
-            0x1000..=0x1FFF => Ok(Chip8Instruction::Jump(self.nnn())),
-            0x2000..=0x2FFF => Ok(Chip8Instruction::CallSubroutine(self.nnn())),
-            0x3000..=0x3FFF => Ok(Chip8Instruction::SkipInstructionIfVxEqualsNn(self.x(), self.nn())),
-            0x4000..=0x4FFF => Ok(Chip8Instruction::SkipInstructionIfVxNotEqualsNn(self.x(), self.nn())),
-            0x5000..=0x5FFF => Ok(Chip8Instruction::SkipInstructionIfVxEqualsVy(self.x(), self.y())),
-            0x6000..=0x6FFF => Ok(Chip8Instruction::SetVariableRegister(self.x(), self.nn())),
-            0x7000..=0x7FFF => Ok(Chip8Instruction::AddToVariableRegister(self.x(), self.nn())),
-            0x8000..=0x8FFF => {
-                match self.n() {
-                    0x0 => Ok(Chip8Instruction::SetVxToVy(self.x(), self.y())),
-                    0x1 => Ok(Chip8Instruction::BinaryOrVxWithVy(self.x(), self.y())),
-                    0x2 => Ok(Chip8Instruction::BinaryAndVxWithVy(self.x(), self.y())),
-                    0x3 => Ok(Chip8Instruction::BinaryXorVxWithVy(self.x(), self.y())),
-                    0x4 => Ok(Chip8Instruction::AddVyToVx(self.x(), self.y())),
-                    0x5 => Ok(Chip8Instruction::SubtractVyFromVx(self.x(), self.y())),
-                    0x6 => Ok(Chip8Instruction::ShiftVxRight(self.x(), self.y())),
-                    0x7 => Ok(Chip8Instruction::SubtractVxFromVyIntoVx(self.x(), self.y())),
-                    0xE => Ok(Chip8Instruction::ShiftVxLeft(self.x(), self.y())),
-                    _ => Err(format!("Encountered invalid opcode {:X}", self.opcode)) // TODO test this case
-                }
-            },
-            0x9000..=0x9FFF => Ok(Chip8Instruction::SkipInstructionIfVxNotEqualsVy(self.x(), self.y())),
-            0xA000..=0xAFFF => Ok(Chip8Instruction::SetIndexRegister(self.nnn())),
-            0xB000..=0xBFFF => Ok(Chip8Instruction::JumpWithOffset(self.nnn())),
-            0xC000..=0xCFFF => Ok(Chip8Instruction::RandomizeVx(self.x(), self.nn())),
-            0xD000..=0xDFFF => Ok(Chip8Instruction::Draw(self.x(), self.y(), self.n())),
-            0xE000..=0xEFFF => {
-                match self.nn() {
-                    0x9E => Ok(Chip8Instruction::SkipIfKeyDown(self.x())),
-                    0xA1 => Ok(Chip8Instruction::SkipIfKeyUp(self.x())),
-                    _ => Err(format!("Encountered invalid opcode {:X}", self.opcode)) // TODO test this case
-                }
-            }
-            0xF000..=0xFFFF => {
-                match self.nn() {
-                    0x07 => Ok(Chip8Instruction::SetVxToDelayTimer(self.x())),
-                    0x0A => Ok(Chip8Instruction::PutKeyIntoVx(self.x())),
-                    0x15 => Ok(Chip8Instruction::SetDelayTimerToVx(self.x())),
-                    0x18 => Ok(Chip8Instruction::SetSoundTimerToVx(self.x())),
-                    0x1E => Ok(Chip8Instruction::AddVxToIndexRegister(self.x())),
-                    0x29 => Ok(Chip8Instruction::PointIndexRegisterAtFontCharacter(self.x())),
-                    0x33 => Ok(Chip8Instruction::PutVxDecimalDigitsIntoMemory(self.x())),
-                    0x55 => Ok(Chip8Instruction::StoreVariableRegistersToMemory(self.x())),
-                    0x65 => Ok(Chip8Instruction::LoadVariableRegistersFromMemory(self.x())),
-                    _ => Err(format!("Encountered invalid opcode {:X}", self.opcode)) // TODO test this case
-                }
-            }
-            _ => Err(format!("Encountered invalid opcode {:X}", self.opcode))
-        }
     }
 }
 
@@ -386,59 +243,77 @@ impl<R: Rng> Chip8<R> {
         self.keypad_state[key.key_index()]
     }
 
-    /// Execute the next instruction at the address pointed to by the program counter register
+    /// Execute the instruction at the address pointed to by the program counter register
+    /// and increment the program counter register so the next instruction can be executed on the
+    /// next call.
     pub fn execute_next_instruction(&mut self) {
-        // let instruction = self.fetch_next_instruction().unwrap_or_else(|err| panic!("{}", err));
-        let fetch_result = self.fetch_next_instruction();
+         let opcode = self.fetch_next_opcode();
+
         self.program_counter += 2;
 
-        if let Ok(instruction) = fetch_result {
-            match instruction {
-                Chip8Instruction::ClearScreen => self.clear_screen(),
-                Chip8Instruction::Jump(nnn) => self.jump(nnn),
-                Chip8Instruction::SetVariableRegister(x, nn) => self.set_variable_register(x, nn),
-                Chip8Instruction::AddToVariableRegister(x, nn) => self.add_to_variable_register(x, nn),
-                Chip8Instruction::SetIndexRegister(nnn) => self.set_index_register(nnn),
-                Chip8Instruction::Draw(x, y, n) => self.draw(x, y, n),
-                Chip8Instruction::CallSubroutine(nnn) => self.call_subroutine(nnn),
-                Chip8Instruction::ReturnFromSubroutine => self.return_from_subroutine(),
-                Chip8Instruction::SkipInstructionIfVxEqualsNn(x, nn) => self.skip_instruction_if_vx_equals_nn(x, nn),
-                Chip8Instruction::SkipInstructionIfVxNotEqualsNn(x, nn) => self.skip_instruction_if_vx_not_equals_nn(x, nn),
-                Chip8Instruction::SkipInstructionIfVxEqualsVy(x, y) => self.skip_instruction_if_vx_equals_vy(x, y),
-                Chip8Instruction::SkipInstructionIfVxNotEqualsVy(x, y) => self.skip_instruction_if_vx_not_equals_vy(x, y),
-                Chip8Instruction::SetVxToVy(x, y) => self.set_vx_to_vy(x, y),
-                Chip8Instruction::BinaryOrVxWithVy(x, y) => self.binary_or_vx_with_vy(x, y),
-                Chip8Instruction::BinaryAndVxWithVy(x, y) => self.binary_and_vx_with_vy(x, y),
-                Chip8Instruction::BinaryXorVxWithVy(x, y) => self.binary_xor_vx_with_vy(x, y),
-                Chip8Instruction::AddVyToVx(x, y) => self.add_vy_to_vx(x, y),
-                Chip8Instruction::SubtractVyFromVx(x, y) => self.subtract_vy_from_vx(x, y),
-                Chip8Instruction::SubtractVxFromVyIntoVx(x, y) => self.subtract_vx_from_vy_into_vx(x, y),
-                Chip8Instruction::ShiftVxRight(x, y) => self.shift_vx_right(x, y),
-                Chip8Instruction::ShiftVxLeft(x, y) => self.shift_vx_left(x, y),
-                Chip8Instruction::JumpWithOffset(nnn) => self.jump_with_offset(nnn),
-                Chip8Instruction::RandomizeVx(x, nn) => self.randomize_vx(x, nn),
-                Chip8Instruction::SkipIfKeyDown(x) => self.skip_if_key_down(x),
-                Chip8Instruction::SkipIfKeyUp(x) => self.skip_if_key_up(x),
-                Chip8Instruction::SetVxToDelayTimer(x) => self.set_vx_to_delay_timer(x),
-                Chip8Instruction::SetDelayTimerToVx(x) => self.set_delay_timer_to_vx(x),
-                Chip8Instruction::SetSoundTimerToVx(x) => self.set_sound_timer_to_vx(x),
-                Chip8Instruction::AddVxToIndexRegister(x) => self.add_vx_to_index_register(x),
-                Chip8Instruction::PutKeyIntoVx(x) => self.put_key_into_vx(x),
-                Chip8Instruction::PointIndexRegisterAtFontCharacter(x) => self.point_index_register_at_font_character(x),
-                Chip8Instruction::PutVxDecimalDigitsIntoMemory(x) => self.put_vx_decimal_digits_into_memory(x),
-                Chip8Instruction::StoreVariableRegistersToMemory(x) => self.store_variable_registers_to_memory(x),
-                Chip8Instruction::LoadVariableRegistersFromMemory(x) => self.load_variable_registers_from_memory(x),
-            };
+        match opcode.opcode {
+            0x00E0 => self.clear_screen(),
+            0x00EE => self.return_from_subroutine(),
+            0x1000..=0x1FFF => self.jump(opcode.nnn()),
+            0x2000..=0x2FFF => self.call_subroutine(opcode.nnn()),
+            0x3000..=0x3FFF => self.skip_instruction_if_vx_equals_nn(opcode.x(), opcode.nn()),
+            0x4000..=0x4FFF => self.skip_instruction_if_vx_not_equals_nn(opcode.x(), opcode.nn()),
+            0x5000..=0x5FFF => self.skip_instruction_if_vx_equals_vy(opcode.x(), opcode.y()),
+            0x6000..=0x6FFF => self.set_variable_register(opcode.x(), opcode.nn()),
+            0x7000..=0x7FFF => self.add_to_variable_register(opcode.x(), opcode.nn()),
+            0x8000..=0x8FFF => {
+                match opcode.n() {
+                    0x0 => self.set_vx_to_vy(opcode.x(), opcode.y()),
+                    0x1 => self.binary_or_vx_with_vy(opcode.x(), opcode.y()),
+                    0x2 => self.binary_and_vx_with_vy(opcode.x(), opcode.y()),
+                    0x3 => self.binary_xor_vx_with_vy(opcode.x(), opcode.y()),
+                    0x4 => self.add_vy_to_vx(opcode.x(), opcode.y()),
+                    0x5 => self.subtract_vy_from_vx(opcode.x(), opcode.y()),
+                    0x6 => self.shift_vx_right(opcode.x(), opcode.y()),
+                    0x7 => self.subtract_vx_from_vy_into_vx(opcode.x(), opcode.y()),
+                    0xE => self.shift_vx_left(opcode.x(), opcode.y()),
+                    _ => panic!("Encountered invalid opcode {:X}", opcode.opcode) // TODO test this case
+                }
+            },
+            0x9000..=0x9FFF => self.skip_instruction_if_vx_not_equals_vy(opcode.x(), opcode.y()),
+            0xA000..=0xAFFF => self.set_index_register(opcode.nnn()),
+            0xB000..=0xBFFF => self.jump_with_offset(opcode.nnn()),
+            0xC000..=0xCFFF => self.randomize_vx(opcode.x(), opcode.nn()),
+            0xD000..=0xDFFF => self.draw(opcode.x(), opcode.y(), opcode.n()),
+            0xE000..=0xEFFF => {
+                match opcode.nn() {
+                    0x9E => self.skip_if_key_down(opcode.x()),
+                    0xA1 => self.skip_if_key_up(opcode.x()),
+                    _ => panic!("Encountered invalid opcode {:X}", opcode.opcode) // TODO test this case
+                }
+            }
+            0xF000..=0xFFFF => {
+                match opcode.nn() {
+                    0x07 => self.set_vx_to_delay_timer(opcode.x()),
+                    0x0A => self.put_key_into_vx(opcode.x()),
+                    0x15 => self.set_delay_timer_to_vx(opcode.x()),
+                    0x18 => self.set_sound_timer_to_vx(opcode.x()),
+                    0x1E => self.add_vx_to_index_register(opcode.x()),
+                    0x29 => self.point_index_register_at_font_character(opcode.x()),
+                    0x33 => self.put_vx_decimal_digits_into_memory(opcode.x()),
+                    0x55 => self.store_variable_registers_to_memory(opcode.x()),
+                    0x65 => self.load_variable_registers_from_memory(opcode.x()),
+                    _ => panic!("Encountered invalid opcode {:X}", opcode.opcode) // TODO test this case
+                }
+            }
+            _ => panic!("Encountered invalid opcode {:X}", opcode.opcode)
         }
     }
 
-    /// Fetch the next instruction at the address pointed to by the program counter register
-    fn fetch_next_instruction(&mut self) -> Result<Chip8Instruction, String> {
+    /// Fetches and returns the next opcode starting at the address pointed to by the program
+    /// counter register.
+    fn fetch_next_opcode(&mut self) -> OpCode {
         let high = self.ram[self.program_counter as usize];
         let low = self.ram[(self.program_counter + 1) as usize];
 
         let opcode = (high as u16) << 8 | low as u16;
-        OpCode::new(opcode).as_instruction()
+
+        OpCode::new(opcode)
     }
 
     /// sets all values in the frame buffer to 0
@@ -833,47 +708,6 @@ mod tests {
     }
 
     #[test]
-    fn clear_screen_has_correct_opcode() {
-        let opcode = OpCode::new(0x00E0);
-        assert_eq!(Ok(Chip8Instruction::ClearScreen), opcode.as_instruction());
-    }
-
-    #[test]
-    fn jump_has_correct_opcode() {
-        let opcode = OpCode::new(0x1234);
-        assert_eq!(Ok(Chip8Instruction::Jump(0x234)), opcode.as_instruction());
-    }
-
-    #[test]
-    fn set_variable_register_has_correct_opcode() {
-        let opcode = OpCode::new(0x6234);
-        assert_eq!(Ok(Chip8Instruction::SetVariableRegister(0x2, 0x34)), opcode.as_instruction());
-    }
-
-    #[test]
-    fn add_to_variable_register_has_correct_opcode() {
-        let opcode = OpCode::new(0x7234);
-        assert_eq!(Ok(Chip8Instruction::AddToVariableRegister(0x2, 0x34)), opcode.as_instruction());
-    }
-
-    #[test]
-    fn set_index_register_has_correct_opcode() {
-        let opcode = OpCode::new(0xA234);
-        assert_eq!(Ok(Chip8Instruction::SetIndexRegister(0x234)), opcode.as_instruction());
-    }
-
-    #[test]
-    fn draw_has_correct_opcode() {
-        let opcode = OpCode::new(0xD234);
-        assert_eq!(Ok(Chip8Instruction::Draw(0x2, 0x3, 0x4)), opcode.as_instruction());
-    }
-
-    #[test]
-    fn invalid_opcode_returns_error_when_parsed_to_instruction() {
-        assert!(OpCode::new(0x0234).as_instruction().is_err());
-    }
-
-    #[test]
     fn can_load_program() {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         let program = [0x00, 0xE0, 0x12, 0x34, 0x56, 0x78];
@@ -944,14 +778,15 @@ mod tests {
     }
 
     #[test]
-    fn can_fetch_next_instruction() {
+    fn can_fetch_next_opcode() {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x00;
         chip8.ram[0x201] = 0xE0;
         chip8.program_counter = 0x200;
 
-        let instruction = chip8.fetch_next_instruction();
-        assert_eq!(Ok(Chip8Instruction::ClearScreen), instruction);
+        let opcode = chip8.fetch_next_opcode();
+
+        assert_eq!(0x00E0, opcode.opcode);
     }
 
     #[test]
@@ -1836,7 +1671,7 @@ mod tests {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x33;
         chip8.ram[0x201] = 0x34;
-        chip8.program_counter = 0x202;
+        chip8.program_counter = 0x200;
         chip8.variable_registers[0x03] = 0x34;
 
         chip8.execute_next_instruction();
@@ -1847,9 +1682,9 @@ mod tests {
     #[test]
     fn execute_next_instruction_can_execute_skip_instruction_if_vx_not_equals_nn() {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
-        chip8.ram[0x200] = 0x33;
+        chip8.ram[0x200] = 0x43;
         chip8.ram[0x201] = 0x34;
-        chip8.program_counter = 0x202;
+        chip8.program_counter = 0x200;
         chip8.variable_registers[0x03] = 0x35;
 
         chip8.execute_next_instruction();
@@ -1862,7 +1697,7 @@ mod tests {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x53;
         chip8.ram[0x201] = 0x20;
-        chip8.program_counter = 0x202;
+        chip8.program_counter = 0x200;
         chip8.variable_registers[0x02] = 0x34;
         chip8.variable_registers[0x03] = 0x34;
 
@@ -1876,7 +1711,7 @@ mod tests {
         let mut chip8 = Chip8::new(EmulatorType::CosmacVip, rand::rng());
         chip8.ram[0x200] = 0x93;
         chip8.ram[0x201] = 0x20;
-        chip8.program_counter = 0x202;
+        chip8.program_counter = 0x200;
         chip8.variable_registers[0x02] = 0x34;
         chip8.variable_registers[0x03] = 0x35;
 
